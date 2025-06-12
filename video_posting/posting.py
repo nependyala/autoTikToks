@@ -52,10 +52,14 @@ def save_screenshot(driver: webdriver.Chrome, name: str):
         driver (webdriver.Chrome): Chrome WebDriver instance
         name (str): Name for the screenshot
     """
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
-    filename = f"capcut_{name}_{timestamp}.png"
-    driver.save_screenshot(filename)
-    print(f"Saved screenshot: {filename}")
+    try:
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        filename = f"capcut_{name}_{timestamp}.png"
+        print(f"Attempting to save screenshot: {filename}")
+        driver.save_screenshot(filename)
+        print(f"Successfully saved screenshot: {filename}")
+    except Exception as e:
+        print(f"Error saving screenshot {name}: {str(e)}")
 
 def find_and_click_button(driver: webdriver.Chrome, button_text: str = None) -> bool:
     """
@@ -82,7 +86,7 @@ def find_and_click_button(driver: webdriver.Chrome, button_text: str = None) -> 
     next_button = None
     for selector in next_button_selectors:
         try:
-            print(f"Trying button selector: {selector}")
+            print(f"\nTrying button selector: {selector}")
             elements = driver.find_elements(By.XPATH, selector)
             if elements:
                 print(f"Found {len(elements)} elements with selector {selector}")
@@ -90,6 +94,14 @@ def find_and_click_button(driver: webdriver.Chrome, button_text: str = None) -> 
                     print(f"Element text: {elem.text}")
                     print(f"Element class: {elem.get_attribute('class')}")
                     print(f"Element role: {elem.get_attribute('role')}")
+                    print(f"Element type: {elem.get_attribute('type')}")
+                    print(f"Element name: {elem.get_attribute('name')}")
+                    print(f"Element id: {elem.get_attribute('id')}")
+                    print(f"Element is displayed: {elem.is_displayed()}")
+                    print(f"Element is enabled: {elem.is_enabled()}")
+                    print(f"Element location: {elem.location}")
+                    print(f"Element size: {elem.size}")
+                    print("---")
                     if elem.is_displayed() and elem.is_enabled():
                         next_button = elem
                         break
@@ -104,8 +116,30 @@ def find_and_click_button(driver: webdriver.Chrome, button_text: str = None) -> 
     if not next_button:
         raise Exception(f"Could not find button{': ' + button_text if button_text else ''}")
     
-    print(f"Clicking button{': ' + button_text if button_text else ''}...")
-    next_button.click()
+    print(f"\nAttempting to click button{': ' + button_text if button_text else ''}...")
+    print(f"Button details before click:")
+    print(f"Text: {next_button.text}")
+    print(f"Class: {next_button.get_attribute('class')}")
+    print(f"Role: {next_button.get_attribute('role')}")
+    print(f"Type: {next_button.get_attribute('type')}")
+    print(f"Name: {next_button.get_attribute('name')}")
+    print(f"ID: {next_button.get_attribute('id')}")
+    print(f"Is displayed: {next_button.is_displayed()}")
+    print(f"Is enabled: {next_button.is_enabled()}")
+    print(f"Location: {next_button.location}")
+    print(f"Size: {next_button.size}")
+    
+    try:
+        # Try JavaScript click first
+        print("Attempting JavaScript click...")
+        driver.execute_script("arguments[0].click();", next_button)
+        print("JavaScript click successful")
+    except Exception as e:
+        print(f"JavaScript click failed: {str(e)}")
+        print("Attempting regular click...")
+        next_button.click()
+        print("Regular click successful")
+    
     time.sleep(2)
     return True
 
@@ -187,103 +221,116 @@ def handle_google_popup(driver: webdriver.Chrome) -> bool:
         time.sleep(2)  # Wait longer for input to be processed
         save_screenshot(driver, "07_password_entered")
         
-        # Click Next after password and immediately search for recovery confirmation
-        print("\nClicking Next and immediately searching for recovery confirmation...")
+        # Click Next after password
+        print("\nClicking Next after password...")
         try:
             # Take screenshot before clicking Next
             save_screenshot(driver, "08a_before_password_next")
+            
+            # Print page source for debugging
+            print("\nPage source after password entry:")
+            print(driver.page_source[:1000])  # Print first 1000 characters
             
             # Click Next
             if not find_and_click_button(driver, "Next"):
                 raise Exception("Failed to click Next after password")
             
-            # Take screenshot immediately after clicking Next
-            save_screenshot(driver, "08b_after_password_next")
-            
-            # Immediately search for recovery email confirmation
-            print("Searching for recovery email confirmation...")
-            recovery_selectors = [
-                "//div[contains(text(), 'Confirm your recovery email')]",
-                "//div[contains(text(), 'recovery email')]",
-                "//div[contains(text(), 'recovery')]",
-                "//*[contains(text(), 'Confirm your recovery email')]",
-                "//*[contains(text(), 'recovery email')]",
-                "//*[contains(text(), 'recovery')]"
-            ]
-            
-            recovery_element = None
-            for selector in recovery_selectors:
+            # Check if popup is still open before taking screenshot
+            if popup_handle in driver.window_handles:
                 try:
-                    print(f"Trying selector: {selector}")
-                    elements = driver.find_elements(By.XPATH, selector)
-                    if elements:
-                        print(f"Found {len(elements)} elements with selector {selector}")
-                        for elem in elements:
-                            print(f"Element text: {elem.text}")
-                            print(f"Element tag: {elem.tag_name}")
-                            print(f"Element class: {elem.get_attribute('class')}")
-                            if elem.is_displayed() and elem.is_enabled():
-                                recovery_element = elem
-                                break
-                    
-                    if recovery_element:
-                        print(f"Found clickable recovery element using selector: {selector}")
-                        break
+                    driver.switch_to.window(popup_handle)
+                    save_screenshot(driver, "08b_after_password_next")
                 except Exception as e:
-                    print(f"Selector {selector} failed: {str(e)}")
-                    continue
-            
-            if recovery_element:
-                print("Clicking recovery email confirmation...")
-                recovery_element.click()
-                save_screenshot(driver, "08c_recovery_confirmation_clicked")
-            else:
-                print("Could not find recovery email confirmation element")
-                save_screenshot(driver, "08c_recovery_not_found")
+                    print(f"Could not take screenshot after Next click: {str(e)}")
             
             # Check if popup is still open
             if popup_handle not in driver.window_handles:
-                print("Popup window closed after recovery confirmation - this is normal for successful login")
-                # Switch back to main window
+                print("Popup window closed after clicking Next - this might indicate successful login")
                 driver.switch_to.window(main_handle)
-                time.sleep(10)  # Wait for page to settle
-                time.sleep(2)  # Additional 2-second wait before final screenshot
+                print("Waiting 5 seconds for page to settle...")
+                time.sleep(5)  # Wait 5 seconds after popup closes
                 save_screenshot(driver, "11_final")
                 return True
             
-            # Now look for the recovery email input field
+            # Wait a moment for the page to load
+            time.sleep(2)
+            
+            # Print all text elements on the page to help debug
+            print("\nAll text elements on the page:")
+            elements = driver.find_elements(By.XPATH, "//*[text()]")
+            for elem in elements:
+                print(f"Text: {elem.text}")
+                print(f"Tag: {elem.tag_name}")
+                print(f"Class: {elem.get_attribute('class')}")
+                print("---")
+            
+            # Look for recovery email input field
+            print("\nLooking for recovery email input field...")
             try:
-                recovery_input = WebDriverWait(driver, 2).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='email']"))
-                )
+                # Try multiple selectors for the recovery email input
+                recovery_selectors = [
+                    "input[type='email']",
+                    "input[name='recoveryEmail']",
+                    "input[aria-label*='recovery']",
+                    "input[placeholder*='recovery']"
+                ]
                 
-                print(f"Entering recovery email: {recovery_email}")
-                recovery_input.clear()
-                recovery_input.send_keys(recovery_email)
-                time.sleep(1)
-                save_screenshot(driver, "09_recovery_email_entered")
+                recovery_input = None
+                for selector in recovery_selectors:
+                    try:
+                        print(f"Trying selector: {selector}")
+                        elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                        if elements:
+                            print(f"Found {len(elements)} elements with selector {selector}")
+                            for elem in elements:
+                                print(f"Element type: {elem.get_attribute('type')}")
+                                print(f"Element name: {elem.get_attribute('name')}")
+                                print(f"Element class: {elem.get_attribute('class')}")
+                                if elem.is_displayed() and elem.is_enabled():
+                                    recovery_input = elem
+                                    break
+                        
+                        if recovery_input:
+                            print(f"Found recovery input using selector: {selector}")
+                            break
+                    except Exception as e:
+                        print(f"Selector {selector} failed: {str(e)}")
+                        continue
                 
-                # Click Next after recovery email
-                if not find_and_click_button(driver, "Next"):
-                    raise Exception("Failed to click Next after recovery email")
-                save_screenshot(driver, "10_after_recovery_next")
-            except Exception as e:
-                print(f"Error handling recovery email: {str(e)}")
-                print("Taking screenshot of popup window...")
-                if popup_handle in driver.window_handles:
-                    driver.switch_to.window(popup_handle)
+                if recovery_input:
+                    print(f"Entering recovery email: {recovery_email}")
+                    recovery_input.clear()
+                    recovery_input.send_keys(recovery_email)
+                    time.sleep(1)
+                    save_screenshot(driver, "09_recovery_email_entered")
+                else:
+                    print("Could not find recovery email input field")
                     save_screenshot(driver, "09_recovery_email_not_found")
+                    
+            except Exception as e:
+                print(f"Error entering recovery email: {str(e)}")
+                save_screenshot(driver, "09_recovery_email_error")
+            
+            # Check if popup is still open
+            if popup_handle not in driver.window_handles:
+                print("Popup window closed after recovery email - this is normal for successful login")
+                # Switch back to main window
+                driver.switch_to.window(main_handle)
+                print("Waiting 5 seconds for page to settle...")
+                time.sleep(5)  # Wait 5 seconds after popup closes
+                save_screenshot(driver, "11_final")
+                return True
             
         except Exception as e:
             print(f"Error after clicking Next: {str(e)}")
             # Check if popup is still open
             if popup_handle in driver.window_handles:
-                save_screenshot(driver, "08d_error_after_next")
+                save_screenshot(driver, "08c_error_after_next")
             else:
                 print("Popup window closed after error - this might indicate successful login")
                 driver.switch_to.window(main_handle)
-                time.sleep(10)
-                time.sleep(2)  # Additional 2-second wait before final screenshot
+                print("Waiting 5 seconds for page to settle...")
+                time.sleep(5)  # Wait 5 seconds after popup closes
                 save_screenshot(driver, "11_final")
                 return True
         
