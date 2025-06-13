@@ -176,10 +176,17 @@ def handle_google_popup(driver: webdriver.Chrome) -> bool:
         
         # Load credentials from environment variables
         env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'secrets', '.env')
+        print(f"\nLooking for .env file at: {env_path}")
+        print(f"File exists: {os.path.exists(env_path)}")
         load_dotenv(env_path)
         email = os.getenv('CAPCUT_EMAIL')
         password = os.getenv('CAPCUT_PASSWORD')
         recovery_email = os.getenv('CAPCUT_RECOVERY_EMAIL')
+        
+        print(f"\nEnvironment variables loaded:")
+        print(f"Email exists: {bool(email)}")
+        print(f"Password exists: {bool(password)}")
+        print(f"Recovery email exists: {bool(recovery_email)}")
         
         if not email or not password or not recovery_email:
             raise Exception("CapCut credentials not found in environment variables")
@@ -303,6 +310,11 @@ def handle_google_popup(driver: webdriver.Chrome) -> bool:
                     recovery_input.send_keys(recovery_email)
                     time.sleep(1)
                     save_screenshot(driver, "09_recovery_email_entered")
+                    
+                    # Click Next after recovery email
+                    if not find_and_click_button(driver, "Next"):
+                        raise Exception("Failed to click Next after recovery email")
+                    save_screenshot(driver, "10_after_recovery_email_next")
                 else:
                     print("Could not find recovery email input field")
                     save_screenshot(driver, "09_recovery_email_not_found")
@@ -337,8 +349,8 @@ def handle_google_popup(driver: webdriver.Chrome) -> bool:
         # Switch back to main window and wait
         print("\nSwitching back to main window...")
         driver.switch_to.window(main_handle)
-        time.sleep(10)  # Wait 10 seconds for page to settle
-        time.sleep(2)  # Additional 2-second wait before final screenshot
+        print("Waiting 30 seconds for page to settle...")
+        time.sleep(30)  # Total wait time of 30 seconds
         
         # Take final screenshot of main window
         print("Taking final screenshot...")
@@ -371,49 +383,104 @@ def click_google_button(driver: webdriver.Chrome) -> bool:
         time.sleep(5)  # Wait for page to load
         save_screenshot(driver, "01_login_page")
         
-        print("Looking for Google button...")
-        # Try to find the specific Google button element
-        selectors = [
-            "//div[@class='lv_google_sign_in_btn-expand-wrapper']",
-            "//div[contains(@class, 'lv_google_sign_in_btn-expand-wrapper')]",
-            "//div[contains(@class, 'lv_google_sign_in_btn')]",
-            "//div[contains(@class, 'google_sign_in')]"
+        print("\nLooking specifically for 'Continue with Google' button...")
+        
+        # First, let's print all elements with exact text 'Continue with Google'
+        print("\nScanning all elements for exact text 'Continue with Google':")
+        exact_text_elements = driver.find_elements(By.XPATH, "//*[text()='Continue with Google']")
+        for elem in exact_text_elements:
+            print(f"\nFound element with exact text:")
+            print(f"Tag: {elem.tag_name}")
+            print(f"Class: {elem.get_attribute('class')}")
+            print(f"ID: {elem.get_attribute('id')}")
+            print(f"Text: {elem.text}")
+            print(f"Is displayed: {elem.is_displayed()}")
+            print(f"Is enabled: {elem.is_enabled()}")
+        
+        # Try multiple specific selectors for Google button
+        google_selectors = [
+            "//div[@id='container']//*[contains(text(), 'Continue with Google')]",  # Search within container
+            "//div[contains(@class, 'google_sign_in')]",
+            "//div[contains(@class, 'google')]",
+            "//button[contains(@class, 'google')]",
+            "//a[contains(@class, 'google')]",
+            "//div[contains(@class, 'sign-in')]",
+            "//div[contains(@class, 'signin')]",
+            "//div[contains(@class, 'login')]",
+            # Search for any element containing the exact text
+            "//*[contains(text(), 'Continue with Google')]",
+            # Search for elements that might contain the text in a child element
+            "//*[.//text()[contains(., 'Continue with Google')]]"
         ]
         
-        google_button = None
-        for selector in selectors:
+        for selector in google_selectors:
             try:
-                print(f"\nTrying button selector: {selector}")
                 elements = driver.find_elements(By.XPATH, selector)
-                if elements:
-                    print(f"Found {len(elements)} elements with selector {selector}")
-                    for elem in elements:
-                        print(f"Element class: {elem.get_attribute('class')}")
-                        print(f"Element text: {elem.text}")
-                        print(f"Element tag: {elem.tag_name}")
-                        if elem.is_displayed() and elem.is_enabled():
-                            google_button = elem
-                            break
+                print(f"\nFound {len(elements)} elements with selector: {selector}")
                 
-                if google_button:
-                    print(f"Found clickable Google button using selector: {selector}")
-                    break
+                for elem in elements:
+                    print(f"\nExamining element:")
+                    print(f"Tag: {elem.tag_name}")
+                    print(f"Class: {elem.get_attribute('class')}")
+                    print(f"ID: {elem.get_attribute('id')}")
+                    print(f"Text: {elem.text}")
+                    print(f"Is displayed: {elem.is_displayed()}")
+                    print(f"Is enabled: {elem.is_enabled()}")
+                    
+                    # Get parent element's text as well
+                    try:
+                        parent = elem.find_element(By.XPATH, "..")
+                        print(f"Parent text: {parent.text}")
+                        print(f"Parent class: {parent.get_attribute('class')}")
+                        print(f"Parent ID: {parent.get_attribute('id')}")
+                    except:
+                        print("Could not get parent element")
+                    
+                    # Get all child elements' text
+                    try:
+                        children = elem.find_elements(By.XPATH, ".//*")
+                        print("\nChild elements:")
+                        for child in children:
+                            print(f"Child tag: {child.tag_name}")
+                            print(f"Child text: {child.text}")
+                            print(f"Child class: {child.get_attribute('class')}")
+                            print("---")
+                    except:
+                        print("Could not get child elements")
+                    
+                    if elem.is_displayed() and elem.is_enabled():
+                        # Try to click the element
+                        try:
+                            print("Attempting to click element...")
+                            driver.execute_script("arguments[0].click();", elem)
+                            print("Successfully clicked Google button using JavaScript")
+                            save_screenshot(driver, "02_google_button_clicked")
+                            
+                            # Handle the popup window
+                            if not handle_google_popup(driver):
+                                raise Exception("Failed to handle Google sign-in popup")
+                            
+                            return True
+                        except Exception as e:
+                            print(f"JavaScript click failed: {str(e)}")
+                            try:
+                                elem.click()
+                                print("Successfully clicked Google button using regular click")
+                                save_screenshot(driver, "02_google_button_clicked")
+                                
+                                # Handle the popup window
+                                if not handle_google_popup(driver):
+                                    raise Exception("Failed to handle Google sign-in popup")
+                                
+                                return True
+                            except Exception as e:
+                                print(f"Regular click failed: {str(e)}")
             except Exception as e:
-                print(f"Button selector {selector} failed: {str(e)}")
+                print(f"Selector {selector} failed: {str(e)}")
                 continue
         
-        if not google_button:
-            raise Exception("Could not find Google button")
-        
-        print("Clicking Google button...")
-        google_button.click()
-        save_screenshot(driver, "02_google_button_clicked")
-        
-        # Handle the popup window
-        if not handle_google_popup(driver):
-            raise Exception("Failed to handle Google sign-in popup")
-        
-        return True
+        print("\nCould not find Google sign-in button")
+        return False
         
     except Exception as e:
         print(f"Error: {str(e)}")
