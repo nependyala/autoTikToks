@@ -611,7 +611,8 @@ def find_and_click_lower_title(image_path, region='middle', caption=None):
     Find "Title" text in the middle 50% of the screen horizontally and middle 50% vertically,
     draw red boxes around all instances, and click randomly in the lower instance.
     If only one Title is found, click halfway between Title and "Who can view this video",
-    then type the caption, click between who and ensure, press Return, wait, and press Return again.
+    then type the caption, click between who and ensure, press Return, wait, press Return again,
+    then find and highlight "comment", "allow", and "disclose", and click at a point that connects all three in a T-shape.
     Returns True if successful, False otherwise.
     """
     # Read the image
@@ -883,6 +884,116 @@ def find_and_click_lower_title(image_path, region='middle', caption=None):
                 print("Pressing Return again...")
                 pyautogui.press('return')
                 
+                # Wait a moment for the page to update
+                print("Waiting 0.5 seconds for page to update...")
+                time.sleep(0.5)
+                
+                # Take a new screenshot to find comment
+                print("\nTaking screenshot to find 'comment'...")
+                post_return_screenshot = take_screenshot(os.path.dirname(image_path), 'post_return_screenshot')
+                
+                # Find comment, allow, and disclose
+                img = cv2.imread(post_return_screenshot)
+                if img is not None:
+                    # Get image dimensions
+                    height, width = img.shape[:2]
+                    
+                    # Calculate search area (middle 50% both horizontally and vertically)
+                    start_x = width//4
+                    end_x = (width * 3)//4
+                    start_y = height//4
+                    end_y = (height * 3)//4
+                    
+                    # Create a debug visualization
+                    debug_img = img.copy()
+                    
+                    # Draw green box around search area
+                    cv2.rectangle(debug_img, (start_x, start_y), (end_x, end_y), (0, 255, 0), 2)
+                    
+                    # Convert to RGB for pytesseract
+                    search_area = img[start_y:end_y, start_x:end_x]
+                    search_area_rgb = cv2.cvtColor(search_area, cv2.COLOR_BGR2RGB)
+                    
+                    # Get text data from search area
+                    data = pytesseract.image_to_data(search_area_rgb, output_type=pytesseract.Output.DICT)
+                    
+                    # Find "comment", "allow", and "disclose" (case insensitive)
+                    comment_box = None
+                    allow_box = None
+                    disclose_box = None
+                    
+                    for i, text in enumerate(data['text']):
+                        text_lower = text.lower()
+                        x = data['left'][i] + start_x
+                        y = data['top'][i] + start_y
+                        w = data['width'][i]
+                        h = data['height'][i]
+                        
+                        if text_lower == 'comment':
+                            comment_box = (x, y, w, h)
+                            print(f"Found 'comment' at position ({x}, {y}) with size {w}x{h}")
+                        elif text_lower == 'allow':
+                            allow_box = (x, y, w, h)
+                            print(f"Found 'allow' at position ({x}, {y}) with size {w}x{h}")
+                        elif text_lower == 'disclose':
+                            disclose_box = (x, y, w, h)
+                            print(f"Found 'disclose' at position ({x}, {y}) with size {w}x{h}")
+                    
+                    # Draw red boxes around found words
+                    if comment_box:
+                        cv2.rectangle(debug_img, (comment_box[0], comment_box[1]), 
+                                     (comment_box[0] + comment_box[2], comment_box[1] + comment_box[3]), (0, 0, 255), 2)
+                    if allow_box:
+                        cv2.rectangle(debug_img, (allow_box[0], allow_box[1]), 
+                                     (allow_box[0] + allow_box[2], allow_box[1] + allow_box[3]), (0, 0, 255), 2)
+                    if disclose_box:
+                        cv2.rectangle(debug_img, (disclose_box[0], disclose_box[1]), 
+                                     (disclose_box[0] + disclose_box[2], disclose_box[1] + disclose_box[3]), (0, 0, 255), 2)
+                    
+                    # Calculate T-shaped connection point if all three words are found
+                    if comment_box and allow_box and disclose_box:
+                        # Get the bottom of allow
+                        allow_bottom = allow_box[1] + allow_box[3]
+                        
+                        # Get the left of comment
+                        comment_left = comment_box[0]
+                        
+                        # Get the top of disclose
+                        disclose_top = disclose_box[1]
+                        
+                        # Calculate the point that would connect all three in a T-shape
+                        # This point should be:
+                        # - Horizontally: at comment's left edge
+                        # - Vertically: halfway between allow's bottom and disclose's top
+                        click_x = comment_left
+                        click_y = allow_bottom + ((disclose_top - allow_bottom) // 2)
+                        
+                        # Draw a small circle at the click position
+                        cv2.circle(debug_img, (click_x, click_y), 3, (0, 255, 0), -1)
+                        
+                        # Draw lines to visualize the T-shape
+                        # Vertical line from allow to disclose
+                        cv2.line(debug_img, (click_x, allow_bottom), (click_x, disclose_top), (0, 255, 0), 1)
+                        # Horizontal line to comment
+                        cv2.line(debug_img, (click_x, click_y), (comment_left, click_y), (0, 255, 0), 1)
+                        
+                        # Save the debug visualization
+                        debug_path = post_return_screenshot.replace('.png', '_debug.png')
+                        cv2.imwrite(debug_path, debug_img)
+                        print(f"Saved debug visualization as: {debug_path}")
+                        
+                        # Convert to screen coordinates and click
+                        screen_x, screen_y = screenshot_to_screen_coords(post_return_screenshot, click_x, click_y)
+                        print(f"Clicking at screen coordinates: ({screen_x}, {screen_y})")
+                        pyautogui.moveTo(screen_x, screen_y, duration=0.125)
+                        pyautogui.click()
+                    else:
+                        print("Could not find all three words (comment, allow, disclose) in search area")
+                        # Save debug image even when words aren't found
+                        debug_path = post_return_screenshot.replace('.png', '_debug.png')
+                        cv2.imwrite(debug_path, debug_img)
+                        print(f"Saved debug visualization as: {debug_path}")
+                
                 return True
             else:
                 print("Could not find both 'who' and 'ensure' in search area")
@@ -944,6 +1055,116 @@ def find_and_click_lower_title(image_path, region='middle', caption=None):
     # Press Return again
     print("Pressing Return again...")
     pyautogui.press('return')
+    
+    # Wait a moment for the page to update
+    print("Waiting 0.5 seconds for page to update...")
+    time.sleep(0.5)
+    
+    # Take a new screenshot to find comment
+    print("\nTaking screenshot to find 'comment'...")
+    post_return_screenshot = take_screenshot(os.path.dirname(image_path), 'post_return_screenshot')
+    
+    # Find comment, allow, and disclose
+    img = cv2.imread(post_return_screenshot)
+    if img is not None:
+        # Get image dimensions
+        height, width = img.shape[:2]
+        
+        # Calculate search area (middle 50% both horizontally and vertically)
+        start_x = width//4
+        end_x = (width * 3)//4
+        start_y = height//4
+        end_y = (height * 3)//4
+        
+        # Create a debug visualization
+        debug_img = img.copy()
+        
+        # Draw green box around search area
+        cv2.rectangle(debug_img, (start_x, start_y), (end_x, end_y), (0, 255, 0), 2)
+        
+        # Convert to RGB for pytesseract
+        search_area = img[start_y:end_y, start_x:end_x]
+        search_area_rgb = cv2.cvtColor(search_area, cv2.COLOR_BGR2RGB)
+        
+        # Get text data from search area
+        data = pytesseract.image_to_data(search_area_rgb, output_type=pytesseract.Output.DICT)
+        
+        # Find "comment", "allow", and "disclose" (case insensitive)
+        comment_box = None
+        allow_box = None
+        disclose_box = None
+        
+        for i, text in enumerate(data['text']):
+            text_lower = text.lower()
+            x = data['left'][i] + start_x
+            y = data['top'][i] + start_y
+            w = data['width'][i]
+            h = data['height'][i]
+            
+            if text_lower == 'comment':
+                comment_box = (x, y, w, h)
+                print(f"Found 'comment' at position ({x}, {y}) with size {w}x{h}")
+            elif text_lower == 'allow':
+                allow_box = (x, y, w, h)
+                print(f"Found 'allow' at position ({x}, {y}) with size {w}x{h}")
+            elif text_lower == 'disclose':
+                disclose_box = (x, y, w, h)
+                print(f"Found 'disclose' at position ({x}, {y}) with size {w}x{h}")
+        
+        # Draw red boxes around found words
+        if comment_box:
+            cv2.rectangle(debug_img, (comment_box[0], comment_box[1]), 
+                         (comment_box[0] + comment_box[2], comment_box[1] + comment_box[3]), (0, 0, 255), 2)
+        if allow_box:
+            cv2.rectangle(debug_img, (allow_box[0], allow_box[1]), 
+                         (allow_box[0] + allow_box[2], allow_box[1] + allow_box[3]), (0, 0, 255), 2)
+        if disclose_box:
+            cv2.rectangle(debug_img, (disclose_box[0], disclose_box[1]), 
+                         (disclose_box[0] + disclose_box[2], disclose_box[1] + disclose_box[3]), (0, 0, 255), 2)
+        
+        # Calculate T-shaped connection point if all three words are found
+        if comment_box and allow_box and disclose_box:
+            # Get the bottom of allow
+            allow_bottom = allow_box[1] + allow_box[3]
+            
+            # Get the left of comment
+            comment_left = comment_box[0]
+            
+            # Get the top of disclose
+            disclose_top = disclose_box[1]
+            
+            # Calculate the point that would connect all three in a T-shape
+            # This point should be:
+            # - Horizontally: at comment's left edge
+            # - Vertically: halfway between allow's bottom and disclose's top
+            click_x = comment_left
+            click_y = allow_bottom + ((disclose_top - allow_bottom) // 2)
+            
+            # Draw a small circle at the click position
+            cv2.circle(debug_img, (click_x, click_y), 3, (0, 255, 0), -1)
+            
+            # Draw lines to visualize the T-shape
+            # Vertical line from allow to disclose
+            cv2.line(debug_img, (click_x, allow_bottom), (click_x, disclose_top), (0, 255, 0), 1)
+            # Horizontal line to comment
+            cv2.line(debug_img, (click_x, click_y), (comment_left, click_y), (0, 255, 0), 1)
+            
+            # Save the debug visualization
+            debug_path = post_return_screenshot.replace('.png', '_debug.png')
+            cv2.imwrite(debug_path, debug_img)
+            print(f"Saved debug visualization as: {debug_path}")
+            
+            # Convert to screen coordinates and click
+            screen_x, screen_y = screenshot_to_screen_coords(post_return_screenshot, click_x, click_y)
+            print(f"Clicking at screen coordinates: ({screen_x}, {screen_y})")
+            pyautogui.moveTo(screen_x, screen_y, duration=0.125)
+            pyautogui.click()
+        else:
+            print("Could not find all three words (comment, allow, disclose) in search area")
+            # Save debug image even when words aren't found
+            debug_path = post_return_screenshot.replace('.png', '_debug.png')
+            cv2.imwrite(debug_path, debug_img)
+            print(f"Saved debug visualization as: {debug_path}")
     
     return True
 
