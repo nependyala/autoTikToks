@@ -322,14 +322,15 @@ def get_filename_from_csv(csv_path):
     - platform
     - scheduled_date (just the date portion in YYYY-MM-DD format)
     - scheduled_time (formatted as HH:MM AM/PM)
-    The CSV should have 'filepath', 'platform', and 'scheduled_date' columns.
+    - caption
+    The CSV should have 'filepath', 'platform', 'scheduled_date', and 'caption' columns.
     """
     try:
         # Read the CSV file
         df = pd.read_csv(csv_path)
         
         # Check if required columns exist
-        required_columns = ['filepath', 'platform', 'scheduled_date']
+        required_columns = ['filepath', 'platform', 'scheduled_date', 'caption']
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
             raise ValueError(f"CSV file is missing required columns: {missing_columns}")
@@ -342,6 +343,7 @@ def get_filename_from_csv(csv_path):
         platform = df.iloc[0]['platform']
         scheduled_date = extract_date_from_datetime(df.iloc[0]['scheduled_date'])
         scheduled_time = extract_time_from_datetime(df.iloc[0]['scheduled_date'])
+        caption = df.iloc[0]['caption']
         
         if not scheduled_date or not scheduled_time:
             raise ValueError("Could not parse scheduled_date from CSV")
@@ -357,7 +359,8 @@ def get_filename_from_csv(csv_path):
         print(f"Found platform: {platform}")
         print(f"Found scheduled date: {scheduled_date}")
         print(f"Found scheduled time: {scheduled_time}")
-        return truncated_filename, platform, scheduled_date, scheduled_time
+        print(f"Found caption: {caption}")
+        return truncated_filename, platform, scheduled_date, scheduled_time, caption
         
     except Exception as e:
         print(f"Error reading CSV file: {str(e)}")
@@ -579,6 +582,371 @@ def find_and_click_time(image_path, scheduled_time, region='right', date_box_y=N
     
     return True
 
+def find_color_boundary(img, start_x, start_y, width, direction='down', threshold=30):
+    """
+    Find where the color changes significantly in a given direction.
+    Returns the y-coordinate where the color change occurs.
+    """
+    # Get the color at the start point
+    start_color = img[start_y, start_x]
+    
+    # Check a few points across the width to be more robust
+    check_points = [start_x + (width * i // 4) for i in range(5)]  # 5 points across the width
+    
+    for y in range(start_y, img.shape[0] if direction == 'down' else 0, 1 if direction == 'down' else -1):
+        # Check if any of our points have a significant color change
+        for x in check_points:
+            if x >= img.shape[1]:
+                continue
+            current_color = img[y, x]
+            # Calculate color difference
+            color_diff = np.abs(current_color.astype(int) - start_color.astype(int))
+            if np.mean(color_diff) > threshold:
+                return y
+    
+    return None
+
+def find_and_click_lower_title(image_path, region='middle', caption=None):
+    """
+    Find "Title" text in the middle 50% of the screen horizontally and middle 50% vertically,
+    draw red boxes around all instances, and click randomly in the lower instance.
+    If only one Title is found, click halfway between Title and "Who can view this video",
+    then type the caption, click between who and ensure, press Return, wait, and press Return again.
+    Returns True if successful, False otherwise.
+    """
+    # Read the image
+    img = cv2.imread(image_path)
+    if img is None:
+        print(f"Error: Could not read image at {image_path}")
+        return False
+    
+    # Get image dimensions
+    height, width = img.shape[:2]
+    
+    # Calculate search area boundaries
+    # Horizontal: middle 50% (25% to 75%)
+    start_x = width//4
+    end_x = (width * 3)//4
+    
+    # Vertical: middle 50% of height
+    start_y = height//4
+    end_y = (height * 3)//4
+    
+    # Create search area (middle 50% both horizontally and vertically)
+    search_area = img[start_y:end_y, start_x:end_x]
+    x_offset = start_x
+    y_offset = start_y
+    
+    # Create a debug visualization
+    debug_img = img.copy()
+    
+    # Draw green box around search area
+    cv2.rectangle(debug_img, (start_x, start_y), (end_x, end_y), (0, 255, 0), 2)
+    
+    # Convert to RGB for pytesseract
+    search_area_rgb = cv2.cvtColor(search_area, cv2.COLOR_BGR2RGB)
+    
+    # Get text data from search area
+    data = pytesseract.image_to_data(search_area_rgb, output_type=pytesseract.Output.DICT)
+    
+    # Print all found text for debugging
+    print("\nAll text found in middle region:")
+    for i, text in enumerate(data['text']):
+        if text.strip():  # Only print non-empty text
+            x = data['left'][i] + x_offset
+            y = data['top'][i] + y_offset  # Add y_offset to get correct y position
+            w = data['width'][i]
+            h = data['height'][i]
+            print(f"Text: '{text}' at position ({x}, {y}) with size {w}x{h}")
+            # Draw blue box around all found text
+            cv2.rectangle(debug_img, (x, y), (x + w, y + h), (255, 0, 0), 1)
+    
+    # Find all instances of "Title"
+    title_boxes = []
+    for i, text in enumerate(data['text']):
+        if text.lower() == 'title':
+            x = data['left'][i] + x_offset
+            y = data['top'][i] + y_offset  # Add y_offset to get correct y position
+            w = data['width'][i]
+            h = data['height'][i]
+            title_boxes.append((x, y, w, h))
+            print(f"Found 'Title' at position ({x}, {y}) with size {w}x{h}")
+    
+    if not title_boxes:
+        print("\nNo 'Title' text found in the middle region")
+        # Save debug image even when no title is found
+        debug_path = image_path.replace('.png', '_debug.png')
+        cv2.imwrite(debug_path, debug_img)
+        print(f"Saved debug visualization as: {debug_path}")
+        return False
+    
+    if len(title_boxes) == 1:
+        print("\nFound one instance of 'Title', looking for 'Who can view this video'...")
+        # Find the sequence of words that make up "Who can view this video"
+        who_words = []
+        current_sequence = []
+        expected_words = ["who", "can", "view", "this", "video"]
+        
+        # Sort all text boxes by y-coordinate first, then x-coordinate
+        all_boxes = []
+        for i, text in enumerate(data['text']):
+            if text.strip():
+                x = data['left'][i] + x_offset
+                y = data['top'][i] + y_offset
+                w = data['width'][i]
+                h = data['height'][i]
+                all_boxes.append((text.lower(), x, y, w, h))
+        
+        # Sort by y-coordinate (with some tolerance for same line)
+        y_tolerance = 10  # pixels
+        all_boxes.sort(key=lambda box: (box[2] // y_tolerance, box[1]))
+        
+        # Look for the sequence of words
+        for text, x, y, w, h in all_boxes:
+            if not current_sequence:
+                if text == expected_words[0]:  # Found "who"
+                    current_sequence.append((text, x, y, w, h))
+            else:
+                # Check if this word is next in sequence and on same line
+                expected_word = expected_words[len(current_sequence)]
+                if text == expected_word and abs(y - current_sequence[-1][2]) < y_tolerance:
+                    current_sequence.append((text, x, y, w, h))
+                    if len(current_sequence) == len(expected_words):
+                        who_words = current_sequence
+                        break
+                else:
+                    # Reset if sequence breaks
+                    current_sequence = []
+                    if text == expected_words[0]:
+                        current_sequence.append((text, x, y, w, h))
+        
+        if not who_words:
+            print("Could not find complete 'Who can view this video' sequence")
+            debug_path = image_path.replace('.png', '_debug.png')
+            cv2.imwrite(debug_path, debug_img)
+            print(f"Saved debug visualization as: {debug_path}")
+            return False
+        
+        # Get the Title box
+        title_box = title_boxes[0]
+        
+        # Calculate the Who box as the bounding box of all words
+        who_x = min(x for _, x, _, _, _ in who_words)
+        who_y = min(y for _, _, y, _, _ in who_words)
+        who_w = max(x + w for _, x, _, w, _ in who_words) - who_x
+        who_h = max(y + h for _, _, y, _, h in who_words) - who_y
+        who_box = (who_x, who_y, who_w, who_h)
+        
+        # Draw boxes for visualization
+        cv2.rectangle(debug_img, (title_box[0], title_box[1]), 
+                     (title_box[0] + title_box[2], title_box[1] + title_box[3]), (0, 0, 255), 2)
+        cv2.rectangle(debug_img, (who_box[0], who_box[1]), 
+                     (who_box[0] + who_box[2], who_box[1] + who_box[3]), (0, 0, 255), 2)
+        
+        # Draw individual word boxes in blue for debugging
+        for _, x, y, w, h in who_words:
+            cv2.rectangle(debug_img, (x, y), (x + w, y + h), (255, 0, 0), 1)
+        
+        # Calculate click position:
+        # - Same x-coordinate as Title (middle of Title box)
+        # - Halfway between Title and Who boxes vertically
+        title_center_x = title_box[0] + (title_box[2] // 2)
+        title_bottom = title_box[1] + title_box[3]
+        who_top = who_box[1]
+        
+        # Click halfway between Title bottom and Who top
+        click_x = title_center_x
+        click_y = title_bottom + ((who_top - title_bottom) // 2)
+        
+        # Draw a small circle at the click position
+        cv2.circle(debug_img, (click_x, click_y), 3, (0, 255, 0), -1)
+        
+        # Save the debug visualization
+        debug_path = image_path.replace('.png', '_debug.png')
+        cv2.imwrite(debug_path, debug_img)
+        print(f"\nSaved debug visualization as: {debug_path}")
+        
+        # Convert to screen coordinates and click
+        screen_x, screen_y = screenshot_to_screen_coords(image_path, click_x, click_y)
+        print(f"Clicking at screen coordinates: ({screen_x}, {screen_y})")
+        pyautogui.moveTo(screen_x, screen_y, duration=0.125)
+        pyautogui.click()
+        
+        # Wait a moment before typing
+        time.sleep(0.25)
+        
+        # Type the caption if provided
+        if caption:
+            print(f"\nTyping caption: {caption}")
+            type_text(caption)
+        
+        # Wait a moment for the dropdown to appear
+        print("Waiting 0.25 seconds for dropdown to appear...")
+        time.sleep(0.25)
+        
+        # Take a new screenshot to find everyone
+        print("\nTaking screenshot to find 'everyone'...")
+        post_who_click_screenshot = take_screenshot(os.path.dirname(image_path), 'post_who_click_screenshot')
+        
+        # Find everyone
+        img = cv2.imread(post_who_click_screenshot)
+        if img is not None:
+            # Get image dimensions
+            height, width = img.shape[:2]
+            
+            # Calculate search area (middle 50% both horizontally and vertically)
+            start_x = width//4
+            end_x = (width * 3)//4
+            start_y = height//4
+            end_y = (height * 3)//4
+            
+            # Create a debug visualization
+            debug_img = img.copy()
+            
+            # Draw green box around search area
+            cv2.rectangle(debug_img, (start_x, start_y), (end_x, end_y), (0, 255, 0), 2)
+            
+            # Convert to RGB for pytesseract
+            search_area = img[start_y:end_y, start_x:end_x]
+            search_area_rgb = cv2.cvtColor(search_area, cv2.COLOR_BGR2RGB)
+            
+            # Get text data from search area
+            data = pytesseract.image_to_data(search_area_rgb, output_type=pytesseract.Output.DICT)
+            
+            # Find "who" and "ensure"
+            who_box = None
+            ensure_box = None
+            
+            for i, text in enumerate(data['text']):
+                text_lower = text.lower()
+                if text_lower == 'who':
+                    x = data['left'][i] + start_x
+                    y = data['top'][i] + start_y
+                    w = data['width'][i]
+                    h = data['height'][i]
+                    who_box = (x, y, w, h)
+                    print(f"Found 'who' at position ({x}, {y}) with size {w}x{h}")
+                elif text_lower == 'ensure':
+                    x = data['left'][i] + start_x
+                    y = data['top'][i] + start_y
+                    w = data['width'][i]
+                    h = data['height'][i]
+                    ensure_box = (x, y, w, h)
+                    print(f"Found 'ensure' at position ({x}, {y}) with size {w}x{h}")
+            
+            if who_box and ensure_box:
+                # Draw red boxes around both words
+                cv2.rectangle(debug_img, (who_box[0], who_box[1]), 
+                             (who_box[0] + who_box[2], who_box[1] + who_box[3]), (0, 0, 255), 2)
+                cv2.rectangle(debug_img, (ensure_box[0], ensure_box[1]), 
+                             (ensure_box[0] + ensure_box[2], ensure_box[1] + ensure_box[3]), (0, 0, 255), 2)
+                
+                # Calculate click position:
+                # - Horizontally: exactly at the end of "who"
+                # - Vertically: halfway between "who" and "ensure"
+                click_x = who_box[0] + who_box[2]  # End of "who" box
+                who_bottom = who_box[1] + who_box[3]
+                ensure_top = ensure_box[1]
+                click_y = who_bottom + ((ensure_top - who_bottom) // 2)
+                
+                # Draw a small circle at the click position
+                cv2.circle(debug_img, (click_x, click_y), 3, (0, 255, 0), -1)
+                
+                # Save the debug visualization
+                debug_path = post_who_click_screenshot.replace('.png', '_debug.png')
+                cv2.imwrite(debug_path, debug_img)
+                print(f"Saved debug visualization as: {debug_path}")
+                
+                # Wait a moment before clicking
+                print("Waiting 0.25 seconds before clicking...")
+                time.sleep(0.25)
+                
+                # Convert to screen coordinates and click
+                screen_x, screen_y = screenshot_to_screen_coords(post_who_click_screenshot, click_x, click_y)
+                print(f"Clicking at screen coordinates: ({screen_x}, {screen_y})")
+                pyautogui.moveTo(screen_x, screen_y, duration=0.25)  # Slower movement
+                pyautogui.click()
+                
+                # Wait a moment after clicking
+                print("Waiting 0.25 seconds after clicking...")
+                time.sleep(0.25)
+                
+                # Press Return with a longer delay
+                print("Pressing Return to confirm selection...")
+                pyautogui.press('return')
+                
+                # Wait longer after pressing Return
+                print("Waiting 0.75 seconds after pressing Return...")
+                time.sleep(0.75)
+                
+                # Press Return again
+                print("Pressing Return again...")
+                pyautogui.press('return')
+                
+                return True
+            else:
+                print("Could not find both 'who' and 'ensure' in search area")
+                # Save debug image even when words aren't found
+                debug_path = post_who_click_screenshot.replace('.png', '_debug.png')
+                cv2.imwrite(debug_path, debug_img)
+                print(f"Saved debug visualization as: {debug_path}")
+                return False
+        
+        return True
+    
+    if len(title_boxes) < 2:
+        print(f"\nFound only {len(title_boxes)} instance(s) of 'Title' text, expected 2")
+        # Save debug image even when not enough titles are found
+        debug_path = image_path.replace('.png', '_debug.png')
+        cv2.imwrite(debug_path, debug_img)
+        print(f"Saved debug visualization as: {debug_path}")
+        return False
+    
+    # Sort boxes by y coordinate (top to bottom)
+    title_boxes.sort(key=lambda box: box[1])
+    
+    # Draw red boxes around all found text
+    for i, (x, y, w, h) in enumerate(title_boxes):
+        # Make the lower box a thicker red line
+        thickness = 3 if i == 1 else 2
+        cv2.rectangle(debug_img, (x, y), (x + w, y + h), (0, 0, 255), thickness)
+    
+    # Get the lower box (second one)
+    lower_box = title_boxes[1]
+    
+    # Get a random point inside the lower box
+    padding = 5  # Avoid clicking exactly on the edge
+    click_x = random.randint(lower_box[0] + padding, lower_box[0] + lower_box[2] - padding)
+    click_y = random.randint(lower_box[1] + padding, lower_box[1] + lower_box[3] - padding)
+    
+    # Draw a small circle at the click position
+    cv2.circle(debug_img, (click_x, click_y), 3, (0, 255, 0), -1)
+    
+    # Save the debug visualization
+    debug_path = image_path.replace('.png', '_debug.png')
+    cv2.imwrite(debug_path, debug_img)
+    print(f"\nSaved debug visualization as: {debug_path}")
+    
+    # Convert to screen coordinates and click
+    screen_x, screen_y = screenshot_to_screen_coords(image_path, click_x, click_y)
+    print(f"Clicking at screen coordinates: ({screen_x}, {screen_y})")
+    pyautogui.moveTo(screen_x, screen_y, duration=0.125)
+    pyautogui.click()
+    
+    # Immediately press Return after clicking
+    print("Pressing Return to confirm selection...")
+    pyautogui.press('return')
+    
+    # Wait half a second after pressing Return
+    print("Waiting 0.5 seconds after pressing Return...")
+    time.sleep(0.5)
+    
+    # Press Return again
+    print("Pressing Return again...")
+    pyautogui.press('return')
+    
+    return True
+
 def main():
     # Check if CSV file path is provided
     if len(sys.argv) != 2:
@@ -587,7 +955,7 @@ def main():
         sys.exit(1)
     
     csv_path = sys.argv[1]
-    filename_to_search, platform_to_search, scheduled_date, scheduled_time = get_filename_from_csv(csv_path)
+    filename_to_search, platform_to_search, scheduled_date, scheduled_time, caption = get_filename_from_csv(csv_path)
     
     # Create temporary files folder and processing subfolder
     temp_dir, processing_dir = create_temp_folder()
@@ -619,16 +987,28 @@ def main():
         print("Waiting 0.25 seconds after clicking upload...")
         time.sleep(0.25)
         
-        # Take final screenshot after upload click
-        print("\nTaking final screenshot after upload...")
+        # Take one screenshot after upload that we'll reuse
+        print("\nTaking screenshot after upload...")
         post_upload_screenshot = take_screenshot(processing_dir, 'post_upload_screenshot')
         
-        # Third step: Try to find and click 'Search' in right half
+        # Third step: Try to find and click 'Search' using the same screenshot
         print("\nStep 3: Looking for 'Search' text...")
-        search_found = take_screenshot_and_click(processing_dir, 'Search', 'right', 'search_screenshot', max_attempts=5)
+        click_box = find_and_highlight_text(post_upload_screenshot, 'Search', 'right')
+        search_found = False
         
-        if search_found:
+        if click_box:
+            # Get a random point inside the box
+            screenshot_x, screenshot_y = get_random_point_in_box(click_box)
+            print(f"Selected point in screenshot: ({screenshot_x}, {screenshot_y})")
+            
+            # Convert to screen coordinates and click
+            screen_x, screen_y = screenshot_to_screen_coords(post_upload_screenshot, screenshot_x, screenshot_y)
+            print(f"Clicking at screen coordinates: ({screen_x}, {screen_y})")
+            pyautogui.moveTo(screen_x, screen_y, duration=0.125)
+            pyautogui.click()
+            search_found = True
             print("Successfully clicked Search button")
+            
             # Wait a moment for the search field to be ready
             time.sleep(0.125)
             
@@ -640,28 +1020,62 @@ def main():
             print("Waiting 0.25 seconds after typing...")
             time.sleep(0.25)
             
-            # Take screenshot after typing
+            # Take one screenshot after typing
             print("\nTaking screenshot after typing...")
             post_typing_screenshot = take_screenshot(processing_dir, 'post_typing_screenshot')
         else:
-            print("Search text not found after 5 attempts, skipping search and typing steps")
+            print("Search text not found, skipping search and typing steps")
             # Use the post-upload screenshot for filename search
             post_typing_screenshot = post_upload_screenshot
         
-        # Fifth step: Find and click the filename in middle region
-        # This is the only search that uses center prioritization
+        # Fifth step: Find and click the filename in middle region using the post-typing screenshot
         print("\nStep 5: Looking for filename in middle region...")
-        if not take_screenshot_and_click(processing_dir, filename_to_search, 'middle', 'filename_click_screenshot', prioritize_center=True, max_attempts=5):
-            print("Failed to find filename in search results after 5 attempts, stopping process")
+        max_attempts = 5
+        filename_found = False
+        
+        for attempt in range(max_attempts):
+            print(f"\nAttempt {attempt + 1} of {max_attempts} to find filename...")
+            
+            # Take a new screenshot for each attempt
+            if attempt > 0:
+                print("Taking new screenshot for retry...")
+                post_typing_screenshot = take_screenshot(processing_dir, f'post_typing_screenshot_attempt_{attempt + 1}')
+            
+            click_box = find_and_highlight_text(post_typing_screenshot, filename_to_search, 'middle', prioritize_center=True)
+            
+            if click_box:
+                # Get a random point inside the box
+                screenshot_x, screenshot_y = get_random_point_in_box(click_box)
+                print(f"Selected point in screenshot: ({screenshot_x}, {screenshot_y})")
+                
+                # Convert to screen coordinates and click
+                screen_x, screen_y = screenshot_to_screen_coords(post_typing_screenshot, screenshot_x, screenshot_y)
+                print(f"Clicking at screen coordinates: ({screen_x}, {screen_y})")
+                pyautogui.moveTo(screen_x, screen_y, duration=0.125)
+                pyautogui.click()
+                
+                print("Successfully clicked on filename")
+                filename_found = True
+                break
+            else:
+                print(f"Failed to find filename on attempt {attempt + 1}")
+                if attempt < max_attempts - 1:
+                    print("Waiting 0.5 seconds before retry...")
+                    time.sleep(0.5)
+        
+        if not filename_found:
+            print(f"Failed to find filename after {max_attempts} attempts, stopping process")
             close_current_tab()
             sys.exit(1)
-            
-        print("Successfully clicked on filename")
         
         # Press Enter to open the file
         print("Pressing Enter to open file...")
         time.sleep(0.125)
         pyautogui.press('enter')
+        
+        # Wait half a second after pressing Enter
+        print("Waiting 0.5 seconds after pressing Enter...")
+        time.sleep(0.5)
         
         # Wait a moment for the platform selection to appear
         print("Waiting 0.25 seconds for platform selection...")
@@ -675,6 +1089,10 @@ def main():
             sys.exit(1)
             
         print(f"Successfully clicked {platform_to_search} platform")
+        
+        # Wait half a second after clicking platform
+        print("Waiting 0.5 seconds after clicking platform...")
+        time.sleep(0.5)
         
         # Seventh step: Take screenshot and look for date field
         print("\nStep 7: Looking for date field...")
@@ -711,6 +1129,19 @@ def main():
             if find_and_click_time(time_screenshot, scheduled_time, date_box_y=date_y, date_box_height=date_height, 
                                  date_box_x=date_x, date_box_width=date_width):
                 print("Successfully entered time")
+                
+                # Take screenshot after scrolling
+                print("\nTaking screenshot after scrolling...")
+                post_scroll_screenshot = take_screenshot(processing_dir, 'post_scroll_screenshot')
+                
+                # Find and click the lower Title text in middle region
+                print("\nLooking for lower Title text in middle region...")
+                if not find_and_click_lower_title(post_scroll_screenshot, region='middle', caption=caption):
+                    print("Failed to find lower Title text")
+                    close_current_tab()
+                    sys.exit(1)
+                    
+                print("Successfully clicked lower Title text and typed caption")
             else:
                 print("Failed to enter time")
                 close_current_tab()
