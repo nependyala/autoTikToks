@@ -1,0 +1,28 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: AutomatedTikToks Transcript Fetcher Lambda Function
+
+Resources:
+  TranscriptFetcherFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: transcript_fetch_lambda.zip
+      Handler: transcript_fetch.lambda_handler
+      Runtime: python3.9
+      Timeout: 30
+      MemorySize: 256
+      Description: Fetches transcripts from YouTube videos
+      Environment:
+        Variables:
+          PYTHONPATH: /var/task
+      Policies:
+        - AWSLambdaBasicExecutionRole
+
+Outputs:
+  TranscriptFetcherFunction:
+    Description: "Lambda Function ARN"
+    Value: !GetAtt TranscriptFetcherFunction.Arn
+  TranscriptFetcherFunctionRole:
+    Description: "Implicit IAM Role created for the function"
+    Value: !GetAtt TranscriptFetcherFunctionRole.Arn 

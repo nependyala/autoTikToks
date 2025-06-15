@@ -15,29 +15,6 @@ moviepy>=1.0.3
 pytube>=15.0.0
 python-dateutil>=2.8.2
 
-# New dependencies
-audiocraft
-torch==2.1.0
-torchaudio==2.1.0
-torchvision==0.16.0
-xformers<0.0.23
-av==11.0.0
-einops
-flashy
-hydra-core
-hydra_colorlog
-julius
-num2words
-sentencepiece
-spacy==3.7.6
-transformers>=4.31.0
-tqdm
-demucs
-encodec
-gradio
-librosa
-soundfile
-torchdiffeq
-torchmetrics
-torchtext==0.16.0
-pystoi 
+# Added from the code block
+openai
+fal-client 
