@@ -897,10 +897,10 @@ def find_and_click_lower_title(image_path, region='middle', caption=None):
                 
                 # Take a new screenshot to find comment
                 print("\nTaking screenshot to find 'comment'...")
-                post_return_screenshot = take_screenshot(os.path.dirname(image_path), 'post_return_screenshot')
+                post_comment_search_screenshot = take_screenshot(os.path.dirname(image_path), 'post_comment_search')
                 
                 # Find comment, allow, and disclose
-                img = cv2.imread(post_return_screenshot)
+                img = cv2.imread(post_comment_search_screenshot)
                 if img is not None:
                     # Get image dimensions
                     height, width = img.shape[:2]
@@ -985,19 +985,95 @@ def find_and_click_lower_title(image_path, region='middle', caption=None):
                         cv2.line(debug_img, (click_x, click_y), (comment_left, click_y), (0, 255, 0), 1)
                         
                         # Save the debug visualization
-                        debug_path = post_return_screenshot.replace('.png', '_debug.png')
+                        debug_path = post_comment_search_screenshot.replace('.png', '_debug.png')
                         cv2.imwrite(debug_path, debug_img)
                         print(f"Saved debug visualization as: {debug_path}")
                         
                         # Convert to screen coordinates and click
-                        screen_x, screen_y = screenshot_to_screen_coords(post_return_screenshot, click_x, click_y)
+                        screen_x, screen_y = screenshot_to_screen_coords(post_comment_search_screenshot, click_x, click_y)
                         print(f"Clicking at screen coordinates: ({screen_x}, {screen_y})")
                         pyautogui.moveTo(screen_x, screen_y, duration=0.125)
                         pyautogui.click()
+                        
+                        # Wait a moment after clicking comment
+                        print("Waiting 0.25 seconds after clicking comment...")
+                        time.sleep(0.25)
+                        
+                        # Take new screenshot to create new red box
+                        print("\nTaking screenshot to create new red box...")
+                        post_comment_screenshot = take_screenshot(os.path.dirname(image_path), 'post_comment')
+                        
+                        # Read the new screenshot
+                        img = cv2.imread(post_comment_screenshot)
+                        if img is not None:
+                            # Get image dimensions
+                            height, width = img.shape[:2]
+                            
+                            # Calculate the new box position
+                            # Use the disclose box coordinates from the previous screenshot
+                            if disclose_box:
+                                # Get the right edge of the disclose box
+                                disclose_right = disclose_box[0] + disclose_box[2]
+                                
+                                # Get the right edge of the green box (3/4 of screen width)
+                                green_right = (width * 3)//4
+                                
+                                # Calculate center point between disclose right and green right
+                                center_x = (disclose_right + green_right) // 2
+                                
+                                # Create a new box with same dimensions as disclose box
+                                new_box_width = disclose_box[2]
+                                new_box_height = disclose_box[3]
+                                
+                                # Position the new box so it's centered at center_x
+                                new_box_x = center_x - (new_box_width // 2)
+                                # Move the box down by 4 times its height
+                                new_box_y = disclose_box[1] + (new_box_height * 4)  # Original y + 4 heights
+                                
+                                # Create a debug visualization
+                                debug_img = img.copy()
+                                
+                                # Draw green box around search area
+                                cv2.rectangle(debug_img, (width//4, height//4), ((width * 3)//4, (height * 3)//4), (0, 255, 0), 2)
+                                
+                                # Draw red box around the new position
+                                cv2.rectangle(debug_img, 
+                                            (new_box_x, new_box_y),
+                                            (new_box_x + new_box_width, new_box_y + new_box_height),
+                                            (0, 0, 255), 2)
+                                
+                                # Draw a small circle at the center of the new box
+                                center_point_x = new_box_x + (new_box_width // 2)
+                                center_point_y = new_box_y + (new_box_height // 2)
+                                cv2.circle(debug_img, (center_point_x, center_point_y), 3, (0, 255, 0), -1)
+                                
+                                # Also draw a line showing the 4-height offset for debugging
+                                cv2.line(debug_img, 
+                                        (new_box_x, disclose_box[1]),  # Start at original y
+                                        (new_box_x, new_box_y),        # End at new y
+                                        (0, 255, 0), 1)                # Green line
+                                
+                                # Save the debug visualization
+                                debug_path = post_comment_screenshot.replace('.png', '_debug.png')
+                                cv2.imwrite(debug_path, debug_img)
+                                print(f"Saved debug visualization as: {debug_path}")
+                                
+                                # Convert to screen coordinates and move mouse to center of new box
+                                screen_x, screen_y = screenshot_to_screen_coords(post_comment_screenshot, center_point_x, center_point_y)
+                                print(f"Moving mouse to screen coordinates: ({screen_x}, {screen_y})")
+                                pyautogui.moveTo(screen_x, screen_y, duration=0.25)
+                            else:
+                                print("Could not find disclose box coordinates to position new box")
+                                # Save debug image even when box can't be created
+                                debug_path = post_comment_screenshot.replace('.png', '_debug.png')
+                                cv2.imwrite(debug_path, debug_img)
+                                print(f"Saved debug visualization as: {debug_path}")
+                        
+                        return True
                     else:
                         print("Could not find all three words (comment, allow, disclose) in search area")
                         # Save debug image even when words aren't found
-                        debug_path = post_return_screenshot.replace('.png', '_debug.png')
+                        debug_path = post_comment_search_screenshot.replace('.png', '_debug.png')
                         cv2.imwrite(debug_path, debug_img)
                         print(f"Saved debug visualization as: {debug_path}")
                 
@@ -1067,21 +1143,31 @@ def find_and_click_lower_title(image_path, region='middle', caption=None):
     print("Waiting 0.5 seconds for page to update...")
     time.sleep(0.5)
     
-    # Take a new screenshot to find comment
-    print("\nTaking screenshot to find 'comment'...")
-    post_return_screenshot = take_screenshot(os.path.dirname(image_path), 'post_return_screenshot')
+    # After clicking comment, wait and take new screenshot
+    print("Waiting 0.25 seconds after clicking comment...")
+    time.sleep(0.25)
     
-    # Find comment, allow, and disclose
-    img = cv2.imread(post_return_screenshot)
+    # Take new screenshot to find Schedule text
+    print("\nTaking screenshot to find Schedule text...")
+    post_comment_screenshot = take_screenshot(os.path.dirname(image_path), 'post_comment')
+    
+    # Read the new screenshot
+    img = cv2.imread(post_comment_screenshot)
     if img is not None:
         # Get image dimensions
         height, width = img.shape[:2]
         
-        # Calculate search area (middle 50% both horizontally and vertically)
-        start_x = width//4
-        end_x = (width * 3)//4
-        start_y = height//4
-        end_y = (height * 3)//4
+        # Use the green box coordinates from the previous screenshot as reference
+        # Search area: below the green box, same horizontal region
+        start_x = width//4  # Same as green box
+        end_x = (width * 3)//4  # Same as green box
+        start_y = (height * 3)//4  # Start from bottom of green box
+        end_y = height  # Search all the way to bottom
+        
+        # Create search area
+        search_area = img[start_y:end_y, start_x:end_x]
+        x_offset = start_x
+        y_offset = start_y
         
         # Create a debug visualization
         debug_img = img.copy()
@@ -1090,179 +1176,66 @@ def find_and_click_lower_title(image_path, region='middle', caption=None):
         cv2.rectangle(debug_img, (start_x, start_y), (end_x, end_y), (0, 255, 0), 2)
         
         # Convert to RGB for pytesseract
-        search_area = img[start_y:end_y, start_x:end_x]
         search_area_rgb = cv2.cvtColor(search_area, cv2.COLOR_BGR2RGB)
         
         # Get text data from search area
         data = pytesseract.image_to_data(search_area_rgb, output_type=pytesseract.Output.DICT)
         
-        # Find "comment", "allow", and "disclose" (case insensitive)
-        comment_box = None
-        allow_box = None
-        disclose_box = None
-        
+        # Find "Schedule" or "now" text (case insensitive)
+        target_box = None
+        found_texts = []  # List to store all found text for debugging
         for i, text in enumerate(data['text']):
+            if text.strip():  # Only store non-empty text
+                found_texts.append(text.lower())
             text_lower = text.lower()
-            x = data['left'][i] + start_x
-            y = data['top'][i] + start_y
-            w = data['width'][i]
-            h = data['height'][i]
-            
-            if text_lower == 'comment':
-                comment_box = (x, y, w, h)
-                print(f"Found 'comment' at position ({x}, {y}) with size {w}x{h}")
-            elif text_lower == 'allow':
-                allow_box = (x, y, w, h)
-                print(f"Found 'allow' at position ({x}, {y}) with size {w}x{h}")
-            elif text_lower == 'disclose':
-                disclose_box = (x, y, w, h)
-                print(f"Found 'disclose' at position ({x}, {y}) with size {w}x{h}")
+            if text_lower == 'schedule' or text_lower == 'now':
+                x = data['left'][i] + x_offset
+                y = data['top'][i] + y_offset
+                w = data['width'][i]
+                h = data['height'][i]
+                target_box = (x, y, w, h, text_lower)  # Store which text was found
+                print(f"Found '{text}' at position ({x}, {y}) with size {w}x{h}")
+                break
         
-        # Draw red boxes around found words
-        if comment_box:
-            cv2.rectangle(debug_img, (comment_box[0], comment_box[1]), 
-                         (comment_box[0] + comment_box[2], comment_box[1] + comment_box[3]), (0, 0, 255), 2)
-        if allow_box:
-            cv2.rectangle(debug_img, (allow_box[0], allow_box[1]), 
-                         (allow_box[0] + allow_box[2], allow_box[1] + allow_box[3]), (0, 0, 255), 2)
-        if disclose_box:
-            cv2.rectangle(debug_img, (disclose_box[0], disclose_box[1]), 
-                         (disclose_box[0] + disclose_box[2], disclose_box[1] + disclose_box[3]), (0, 0, 255), 2)
-        
-        # Calculate T-shaped connection point if all three words are found
-        if comment_box and allow_box and disclose_box:
-            # Get the bottom of allow
-            allow_bottom = allow_box[1] + allow_box[3]
-            
-            # Get the left of comment
-            comment_left = comment_box[0]
-            
-            # Get the top of disclose
-            disclose_top = disclose_box[1]
-            
-            # Calculate the point that would connect all three in a T-shape
-            # This point should be:
-            # - Horizontally: at comment's left edge
-            # - Vertically: halfway between allow's bottom and disclose's top
-            click_x = comment_left
-            click_y = allow_bottom + ((disclose_top - allow_bottom) // 2)
-            
-            # Draw a small circle at the click position
-            cv2.circle(debug_img, (click_x, click_y), 3, (0, 255, 0), -1)
-            
-            # Draw lines to visualize the T-shape
-            # Vertical line from allow to disclose
-            cv2.line(debug_img, (click_x, allow_bottom), (click_x, disclose_top), (0, 255, 0), 1)
-            # Horizontal line to comment
-            cv2.line(debug_img, (click_x, click_y), (comment_left, click_y), (0, 255, 0), 1)
+        if target_box:
+            # Draw red box around found text
+            x, y, w, h, found_text = target_box
+            cv2.rectangle(debug_img, (x, y), (x + w, y + h), (0, 0, 255), 2)
             
             # Save the debug visualization
-            debug_path = post_return_screenshot.replace('.png', '_debug.png')
+            debug_path = post_comment_screenshot.replace('.png', '_debug.png')
             cv2.imwrite(debug_path, debug_img)
             print(f"Saved debug visualization as: {debug_path}")
             
-            # Convert to screen coordinates and click
-            screen_x, screen_y = screenshot_to_screen_coords(post_return_screenshot, click_x, click_y)
-            print(f"Clicking at screen coordinates: ({screen_x}, {screen_y})")
-            pyautogui.moveTo(screen_x, screen_y, duration=0.125)
-            pyautogui.click()
-
-            # Wait after clicking comment area
-            print("Waiting 0.25 seconds after clicking comment area...")
-            time.sleep(0.25)
-
-            # Take screenshot to find Schedule text
-            print("\nTaking screenshot to find Schedule text...")
-            post_comment_screenshot = take_screenshot(os.path.dirname(image_path), 'post_comment_screenshot')
-
-            # Find Schedule text below the green box
-            img = cv2.imread(post_comment_screenshot)
-            if img is not None:
-                # Get image dimensions
-                height, width = img.shape[:2]
-                
-                # Calculate search area (middle 50% horizontally, but below the green box vertically)
-                start_x = width//4
-                end_x = (width * 3)//4
-                start_y = height//2  # Start from middle of screen
-                end_y = height  # Search to bottom of screen
-                
-                # Create a debug visualization
-                debug_img = img.copy()
-                
-                # Draw green box around search area
-                cv2.rectangle(debug_img, (start_x, start_y), (end_x, end_y), (0, 255, 0), 2)
-                
-                # Convert to RGB for pytesseract
-                search_area = img[start_y:end_y, start_x:end_x]
-                search_area_rgb = cv2.cvtColor(search_area, cv2.COLOR_BGR2RGB)
-                
-                # Get text data from search area
-                data = pytesseract.image_to_data(search_area_rgb, output_type=pytesseract.Output.DICT)
-                
-                # Find "Schedule" text (case insensitive)
-                schedule_box = None
-                
-                for i, text in enumerate(data['text']):
-                    if text.lower() == 'schedule':
-                        x = data['left'][i] + start_x
-                        y = data['top'][i] + start_y
-                        w = data['width'][i]
-                        h = data['height'][i]
-                        schedule_box = (x, y, w, h)
-                        print(f"Found 'Schedule' at position ({x}, {y}) with size {w}x{h}")
-                        break
-                
-                if schedule_box:
-                    # Draw red box around Schedule text
-                    cv2.rectangle(debug_img, (schedule_box[0], schedule_box[1]), 
-                                (schedule_box[0] + schedule_box[2], schedule_box[1] + schedule_box[3]), (0, 0, 255), 2)
-                    
-                    # Calculate click position (center of the box)
-                    click_x = schedule_box[0] + (schedule_box[2] // 2)
-                    click_y = schedule_box[1] + (schedule_box[3] // 2)
-                    
-                    # Draw a small circle at the click position
-                    cv2.circle(debug_img, (click_x, click_y), 3, (0, 255, 0), -1)
-                    
-                    # Save the debug visualization
-                    debug_path = post_comment_screenshot.replace('.png', '_debug.png')
-                    cv2.imwrite(debug_path, debug_img)
-                    print(f"Saved debug visualization as: {debug_path}")
-                    
-                    # Convert to screen coordinates and move mouse (but don't click)
-                    screen_x, screen_y = screenshot_to_screen_coords(post_comment_screenshot, click_x, click_y)
-                    print(f"Moving mouse to screen coordinates: ({screen_x}, {screen_y})")
-                    pyautogui.moveTo(screen_x, screen_y, duration=0.25)
-                else:
-                    print("Could not find 'Schedule' text in search area")
-                    # Save debug image even when Schedule isn't found
-                    debug_path = post_comment_screenshot.replace('.png', '_debug.png')
-                    cv2.imwrite(debug_path, debug_img)
-                    print(f"Saved debug visualization as: {debug_path}")
-                
-                return True
-            else:
-                print("Failed to find comment area")
-                # Save debug image even when comment area isn't found
-                debug_path = post_return_screenshot.replace('.png', '_debug.png')
-                cv2.imwrite(debug_path, debug_img)
-                print(f"Saved debug visualization as: {debug_path}")
-                return False
+            # Get a random point inside the box
+            padding = 5  # Avoid clicking exactly on the edge
+            random_x = random.randint(x + padding, x + w - padding)
+            random_y = random.randint(y + padding, y + h - padding)
+            
+            # Draw a small circle at the random point
+            cv2.circle(debug_img, (random_x, random_y), 3, (0, 255, 0), -1)
+            
+            # Convert to screen coordinates and move mouse (but don't click)
+            screen_x, screen_y = screenshot_to_screen_coords(post_comment_screenshot, random_x, random_y)
+            print(f"Moving mouse to screen coordinates: ({screen_x}, {screen_y})")
+            pyautogui.moveTo(screen_x, screen_y, duration=0.25)
         else:
-            print("Failed to find comment area")
-            # Save debug image even when comment area isn't found
-            debug_path = post_return_screenshot.replace('.png', '_debug.png')
+            print("\nDEBUG: Could not find 'Schedule' or 'now' text in search area")
+            print(f"Search area: x={start_x} to {end_x}, y={start_y} to {end_y}")
+            print("All text found in search area:")
+            for text in found_texts:
+                print(f"  - '{text}'")
+            print("\nPossible reasons:")
+            print("1. Text might be in a different font or color")
+            print("2. Text might be partially obscured")
+            print("3. Text might be outside the search area")
+            print("4. Screenshot might be blurry or low quality")
+            # Save debug image even when text isn't found
+            debug_path = post_comment_screenshot.replace('.png', '_debug.png')
             cv2.imwrite(debug_path, debug_img)
             print(f"Saved debug visualization as: {debug_path}")
-            return False
-    else:
-        print("Failed to find comment area")
-        # Save debug image even when comment area isn't found
-        debug_path = post_return_screenshot.replace('.png', '_debug.png')
-        cv2.imwrite(debug_path, debug_img)
-        print(f"Saved debug visualization as: {debug_path}")
-        return False
+    
+    return True
 
 def main():
     # Check if CSV file path is provided
