@@ -9,6 +9,7 @@ from pathlib import Path
 import torch
 from audiocraft.models import AudioGen
 from audiocraft.data.audio import audio_write
+import re
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -23,7 +24,9 @@ def get_next_audio_path():
     existing_files = list(DOWNLOAD_DIR.glob("generated_audio_*.wav"))
     if not existing_files:
         return DOWNLOAD_DIR / "generated_audio_1.wav"
-    last_num = max(int(f.stem.split("_")[-1]) for f in existing_files)
+    # Use a regex to extract the number (e.g. "generated_audio_1" yields 1) and ignore non-numeric suffixes.
+    filtered_files = (f for f in existing_files if re.search(r"generated_audio_(\d+)", f.stem) is not None)
+    last_num = max((int(re.search(r"generated_audio_(\d+)", f.stem).group(1)) for f in filtered_files), default=0)
     return DOWNLOAD_DIR / f"generated_audio_{last_num + 1}.wav"
 
 def generate_audio(prompt, duration=5.0):
@@ -75,16 +78,7 @@ def generate_audio(prompt, duration=5.0):
         return None
 
 if __name__ == "__main__":
-    # Example usage
-    test_prompt = "A glass apple cracking and landing on a wooden cutting board"
-    output_file = generate_audio(test_prompt)
-    if output_file:
-        print(f"Generated audio saved to: {output_file}")
-    else:
-        print("Failed to generate audio")
-
-    # Additional example usage
-    output_file = generate_audio("A glass apple cracking and landing on a wooden cutting board")
+    output_file = generate_audio("An ultra-satisfying ASMR sound of a razor-sharp blade gliding through a smooth, dense object — like polished fruit or gel. The slice is clean, with a silky shimmer, a soft metallic sheen, and a gentle swish. No crunch, no crackle — just a serene, fluid motion. Emphasize a studio-recorded, whisper-quiet environment with rich, polished acoustics")
     if output_file:
         print(f"Generated audio saved to: {output_file}")
     else:
