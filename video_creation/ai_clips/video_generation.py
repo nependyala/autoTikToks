@@ -132,15 +132,7 @@ def get_next_video_path() -> str:
 
 if __name__ == "__main__":
     # Example usage
-    test_prompt = '''A translucent red glass apple being sliced in a cinematic ASMR video.
-
-The clip begins with the knife already positioned just above the fruit — no time is spent moving the knife into frame or toward the fruit. The cut starts immediately and proceeds in smooth, slow motion, emphasizing the deliberate slicing action.
-
-The knife makes one clean, vertical cut through the fruit. The knife removes exactly one slice, and that slice cleanly falls away. The shape, size, and position of the slice must perfectly match the section that was just cut. There must be no inconsistency between the missing section of the fruit and the fallen piece. The slice must remain intact and wedge-shaped, with no warping, distortion, or mismatch.
-
-The fall of the slice must be brief — no longer than one second — and it must come to a complete stop shortly after landing. Avoid extended motion, wobbling, or floating after impact. Nearly the entire clip should focus on the slow-motion cutting itself.
-
-The rest of the fruit stays motionless and visibly incomplete. The lighting is cinematic and high-resolution, emphasizing the realistic, glassy texture of the fruit. The audio features a soft shimmering glassy tone as the knife cuts, followed by a gentle, satisfying clink when the slice hits the wooden cutting board.'''
+    test_prompt = "A cinematic, photorealistic close-up of a amethyst translucent glass pear being sliced in an ASMR-style video.\n\nThe shot begins with a knife blade already positioned just above the fruit — no motion or approach. The knife makes a single clean, vertical cut through the center of the fruit in smooth, deliberate slow motion, continuing all the way down until it touches the cutting board. The knife then lifts up and exits the frame as the freshly cut slice falls.\n\nThe fruit must have a realistic shape and a fully translucent glass appearance, both inside and out. The slicing motion should dominate the duration of the clip.\n\nOnly one slice is removed, and it must cleanly fall away in the same orientation as the knife cut. The fall lasts no longer than one second and ends with a clear, satisfying, resonant clink as the slice hits the wooden cutting board. The slice and remaining fruit then remain completely still.\n\nThere are no hands, fingers, or knife handles visible — only the knife blade in contact with the fruit is shown. The fruit is untouched and rests naturally on the board. No transitions, fades, or additional effects are used.\n\nThe audio must enhance the ASMR quality: a soft, shimmering, glass-like slicing sound as the knife cuts through, followed by a crisp, crystal-clear clink as the slice lands."
     
     output_path = generate_video(
         prompt=test_prompt,
