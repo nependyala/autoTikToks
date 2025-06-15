@@ -1,0 +1,43 @@
+# Google Cloud dependencies
+google-cloud-aiplatform[vertexai,generative-ai]>=1.44.0
+google-cloud-storage>=2.14.0
+google-auth>=2.27.0
+protobuf>=4.25.1  # Required for Vertex AI
+grpcio>=1.60.0  # Required for Vertex AI
+
+# Other dependencies
+python-dotenv>=1.0.0
+requests>=2.31.0
+pandas>=2.2.0
+numpy>=1.26.0
+Pillow>=10.2.0
+moviepy>=1.0.3
+pytube>=15.0.0
+python-dateutil>=2.8.2
+
+# New dependencies
+audiocraft
+torch==2.1.0
+torchaudio==2.1.0
+torchvision==0.16.0
+xformers<0.0.23
+av==11.0.0
+einops
+flashy
+hydra-core
+hydra_colorlog
+julius
+num2words
+sentencepiece
+spacy==3.7.6
+transformers>=4.31.0
+tqdm
+demucs
+encodec
+gradio
+librosa
+soundfile
+torchdiffeq
+torchmetrics
+torchtext==0.16.0
+pystoi 
