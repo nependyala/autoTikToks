@@ -31,37 +31,57 @@ load_dotenv(env_path)
 print(f"OPENAI_API_KEY exists: {bool(os.getenv('OPENAI_API_KEY'))}")
 
 print("OpenAI class is from:", OpenAI.__module__)
-def generate_prompt() -> str:
+
+def get_random_real_fruit_and_color():
     """
-    Generate a Veo3-ready prompt using OpenAI API.
-    
-    Returns:
-        str: Generated prompt for Veo3 video generation
+    Use OpenAI API to get a random real fruit and color (not made up).
     """
     try:
-        # No need to pass api_key, OpenAI() will use env var
         client = OpenAI()
-        model = os.getenv('OPENAI_MODEL', 'gpt-4.1-mini-2025-04-14')
-        
-        logger.info("Generating Veo3 prompt...")
+        model = os.getenv('OPENAI_MODEL', 'gpt-4o')
+
         response = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": "You are a video prompt generator for Veo3. Your task is to write highly specific, photorealistic video prompts of a translucent glass fruit being sliced in an ASMR-style video. Follow these rules:\n\n1. Choose a random fruit (e.g. apple, pear, plum, peach, orange, fig).\n2. Choose a random color (e.g. green, red, blue, pink, purple, amber).\n3. The fruit must be described as **realistic** and **translucent glass**, with cinematic lighting.\n4. The camera should be close-up and **still** (no movement).\n5. The **knife should slice cleanly**, with **one distinct slice separating and falling away**.\n6. After the slice falls, there must be a **visible missing section** in the fruit.\n7. The slice must **stay intact and shaped like a natural wedge**.\n8. The rest of the fruit remains motionless and visibly incomplete.\n9. Emphasize **object continuity** and **no shape warping**.\n10. The visuals must be **high-resolution, clean, and photorealistic**.\n11. The audio must be **ASMR-style**: a soft, shimmering glassy tone as the knife cuts, followed by a gentle, satisfying clink when the slice hits the wooden cutting board.\n\nOutput only the final prompt. Do not include any notes, preamble, or quotes. The prompt should be Veo3-ready."}
+                {
+                    "role": "user",
+                    "content": (
+                        "Pick one random real fruit (e.g. mango, kiwi, fig, etc.) and one real color (e.g. teal, amber, magenta, etc.). "
+                        "Return only valid, real-world examples. Output only a JSON object with 'fruit' and 'color'. "
+                        "No explanation or extra text."
+                    )
+                }
             ]
         )
-        
-        prompt = response.choices[0].message.content.strip()
-        logger.info("Successfully generated prompt")
-        return prompt
-        
+        content = response.choices[0].message.content.strip()
+        logger.info(f"API response: {content}")
+
+        data = json.loads(content)
+        return data["fruit"], data["color"]
+
     except Exception as e:
-        logger.error(f"Error generating prompt: {str(e)}")
+        logger.error(f"Error getting fruit and color: {str(e)}")
         raise
+
+def generate_prompt(fruit, color):
+    """
+    Build a consistent Veo3-style slicing video prompt using the given fruit and color.
+    """
+    return f"""
+A highly detailed, photorealistic close-up of a {color} translucent glass {fruit} being sliced in a cinematic ASMR video. 
+The camera is perfectly still. A sharp knife makes one clean slice through the fruit. 
+The slice separates and falls away naturally, leaving a visible wedge missing. 
+The sliced piece remains fully intact and shaped like a natural wedge. 
+The rest of the fruit stays motionless and visibly incomplete. 
+The lighting is cinematic and high-resolution, emphasizing the realistic, glassy texture of the fruit. 
+The audio features a soft shimmering glassy tone as the knife cuts, followed by a gentle, satisfying clink 
+when the slice hits the wooden cutting board.
+""".strip()
 
 if __name__ == "__main__":
     try:
-        prompt = generate_prompt()
+        fruit, color = get_random_real_fruit_and_color()
+        prompt = generate_prompt(fruit, color)
         print("\nGenerated Prompt:")
         print("-" * 80)
         print(prompt)
