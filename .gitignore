@@ -1,6 +1,7 @@
 # Secrets
 secrets/
-.env
+secrets/*.json
+secrets/*.env
 
 # Python
 __pycache__/
@@ -26,8 +27,8 @@ wheels/
 
 # Virtual Environment
 venv/
-ENV/
 env/
+ENV/
 
 # IDE
 .idea/
