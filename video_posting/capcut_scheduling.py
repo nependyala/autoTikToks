@@ -90,6 +90,7 @@ def find_and_highlight_text(image_path, search_text, region='right', prioritize_
     Find text in the specified region of the image, draw a red box around it,
     and return the coordinates of the box for clicking.
     If prioritize_center is True and multiple matches are found, prioritizes the one with right edge closest to screen center.
+    Otherwise, prioritizes the leftmost match.
     Text search is case insensitive.
     
     Args:
@@ -169,13 +170,19 @@ def find_and_highlight_text(image_path, search_text, region='right', prioritize_
         # Return the box closest to center (without the distance value)
         click_box = text_boxes[0][:4]
     else:
-        # Draw red boxes around found text and store the first box for clicking
-        click_box = None
-        for i, (x, y, w, h) in enumerate(text_boxes):
-            cv2.rectangle(img, (x, y), (x + w, y + h), (0, 0, 255), 2)
-            if i == 0:  # Store the first box for clicking
-                click_box = (x, y, w, h)
+        # Sort boxes by x-coordinate (left to right)
+        text_boxes.sort(key=lambda box: box[0])
         print(f"Found {len(text_boxes)} instances of '{search_text}' text")
+        print(f"Selected leftmost match at x-coordinate {text_boxes[0][0]}")
+        
+        # Draw red boxes around found text
+        for i, (x, y, w, h) in enumerate(text_boxes):
+            # Make the leftmost box a thicker red line
+            thickness = 3 if i == 0 else 2
+            cv2.rectangle(img, (x, y), (x + w, y + h), (0, 0, 255), thickness)
+        
+        # Return the leftmost box
+        click_box = text_boxes[0]
     
     # Save the annotated image with the original filename
     cv2.imwrite(image_path, img)
@@ -1159,14 +1166,103 @@ def find_and_click_lower_title(image_path, region='middle', caption=None):
             print(f"Clicking at screen coordinates: ({screen_x}, {screen_y})")
             pyautogui.moveTo(screen_x, screen_y, duration=0.125)
             pyautogui.click()
+
+            # Wait after clicking comment area
+            print("Waiting 0.25 seconds after clicking comment area...")
+            time.sleep(0.25)
+
+            # Take screenshot to find Schedule text
+            print("\nTaking screenshot to find Schedule text...")
+            post_comment_screenshot = take_screenshot(os.path.dirname(image_path), 'post_comment_screenshot')
+
+            # Find Schedule text below the green box
+            img = cv2.imread(post_comment_screenshot)
+            if img is not None:
+                # Get image dimensions
+                height, width = img.shape[:2]
+                
+                # Calculate search area (middle 50% horizontally, but below the green box vertically)
+                start_x = width//4
+                end_x = (width * 3)//4
+                start_y = height//2  # Start from middle of screen
+                end_y = height  # Search to bottom of screen
+                
+                # Create a debug visualization
+                debug_img = img.copy()
+                
+                # Draw green box around search area
+                cv2.rectangle(debug_img, (start_x, start_y), (end_x, end_y), (0, 255, 0), 2)
+                
+                # Convert to RGB for pytesseract
+                search_area = img[start_y:end_y, start_x:end_x]
+                search_area_rgb = cv2.cvtColor(search_area, cv2.COLOR_BGR2RGB)
+                
+                # Get text data from search area
+                data = pytesseract.image_to_data(search_area_rgb, output_type=pytesseract.Output.DICT)
+                
+                # Find "Schedule" text (case insensitive)
+                schedule_box = None
+                
+                for i, text in enumerate(data['text']):
+                    if text.lower() == 'schedule':
+                        x = data['left'][i] + start_x
+                        y = data['top'][i] + start_y
+                        w = data['width'][i]
+                        h = data['height'][i]
+                        schedule_box = (x, y, w, h)
+                        print(f"Found 'Schedule' at position ({x}, {y}) with size {w}x{h}")
+                        break
+                
+                if schedule_box:
+                    # Draw red box around Schedule text
+                    cv2.rectangle(debug_img, (schedule_box[0], schedule_box[1]), 
+                                (schedule_box[0] + schedule_box[2], schedule_box[1] + schedule_box[3]), (0, 0, 255), 2)
+                    
+                    # Calculate click position (center of the box)
+                    click_x = schedule_box[0] + (schedule_box[2] // 2)
+                    click_y = schedule_box[1] + (schedule_box[3] // 2)
+                    
+                    # Draw a small circle at the click position
+                    cv2.circle(debug_img, (click_x, click_y), 3, (0, 255, 0), -1)
+                    
+                    # Save the debug visualization
+                    debug_path = post_comment_screenshot.replace('.png', '_debug.png')
+                    cv2.imwrite(debug_path, debug_img)
+                    print(f"Saved debug visualization as: {debug_path}")
+                    
+                    # Convert to screen coordinates and move mouse (but don't click)
+                    screen_x, screen_y = screenshot_to_screen_coords(post_comment_screenshot, click_x, click_y)
+                    print(f"Moving mouse to screen coordinates: ({screen_x}, {screen_y})")
+                    pyautogui.moveTo(screen_x, screen_y, duration=0.25)
+                else:
+                    print("Could not find 'Schedule' text in search area")
+                    # Save debug image even when Schedule isn't found
+                    debug_path = post_comment_screenshot.replace('.png', '_debug.png')
+                    cv2.imwrite(debug_path, debug_img)
+                    print(f"Saved debug visualization as: {debug_path}")
+                
+                return True
+            else:
+                print("Failed to find comment area")
+                # Save debug image even when comment area isn't found
+                debug_path = post_return_screenshot.replace('.png', '_debug.png')
+                cv2.imwrite(debug_path, debug_img)
+                print(f"Saved debug visualization as: {debug_path}")
+                return False
         else:
-            print("Could not find all three words (comment, allow, disclose) in search area")
-            # Save debug image even when words aren't found
+            print("Failed to find comment area")
+            # Save debug image even when comment area isn't found
             debug_path = post_return_screenshot.replace('.png', '_debug.png')
             cv2.imwrite(debug_path, debug_img)
             print(f"Saved debug visualization as: {debug_path}")
-    
-    return True
+            return False
+    else:
+        print("Failed to find comment area")
+        # Save debug image even when comment area isn't found
+        debug_path = post_return_screenshot.replace('.png', '_debug.png')
+        cv2.imwrite(debug_path, debug_img)
+        print(f"Saved debug visualization as: {debug_path}")
+        return False
 
 def main():
     # Check if CSV file path is provided
@@ -1237,9 +1333,9 @@ def main():
             print("\nStep 4: Typing filename...")
             type_text(filename_to_search)
             
-            # Wait a moment after typing
-            print("Waiting 0.25 seconds after typing...")
-            time.sleep(0.25)
+            # Wait 3 seconds after typing before taking screenshot
+            print("Waiting 3 seconds after typing filename...")
+            time.sleep(3.0)
             
             # Take one screenshot after typing
             print("\nTaking screenshot after typing...")
@@ -1369,6 +1465,8 @@ def main():
                 sys.exit(1)
         else:
             print("Failed to find date field")
+            close_current_tab()
+            sys.exit(1)
     else:
         print("Failed to load schedule page after multiple attempts")
         # Close the tab if we failed to load
