@@ -6,7 +6,7 @@ All schedule files are saved in the temporary_files/schedules folder.
 """
 import pandas as pd
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import sys
 
 def get_schedules_dir():
@@ -103,19 +103,82 @@ def add_to_schedule(clip_filepath, posting_date, caption, platform, schedule_fil
         print(f"Error adding to schedule: {str(e)}")
         sys.exit(1)
 
+def create_dummy_schedule():
+    """Create a dummy schedule with 5 entries, all at 7 PM, starting one day later"""
+    # Get current date and add one day
+    current_date = datetime.now() + timedelta(days=1)
+    
+    # Create a list to store schedule entries
+    schedule_entries = []
+    
+    # Original caption
+    caption = 'satisfying asmr ai fruit slicing #aigenerated #satisfying #asmr'
+    
+    # Original file paths
+    files = [
+        'video_posting/clips/red_apple.mp4',
+        'video_posting/clips/purple_pear.mp4',
+        'video_posting/clips/green_apple.mp4',
+        'video_posting/clips/purple_plum.mp4',
+        'video_posting/clips/blue_pineapple.mp4'
+    ]
+    
+    # Create 5 dummy entries
+    for i in range(5):
+        # Set time to 7 PM
+        scheduled_time = current_date.replace(hour=19, minute=0, second=0, microsecond=0)
+        
+        # Add i days for each entry (starting from tomorrow)
+        scheduled_time = scheduled_time + timedelta(days=i)
+        
+        # Create entry
+        entry = {
+            'scheduled_file': files[i],
+            'scheduled_date': scheduled_time.strftime('%Y-%m-%d'),
+            'scheduled_time': scheduled_time.strftime('%H:%M:%S'),
+            'platform': 'TikTok',
+            'caption': caption
+        }
+        schedule_entries.append(entry)
+    
+    # Create DataFrame
+    df = pd.DataFrame(schedule_entries)
+    
+    # Create schedules directory if it doesn't exist
+    schedules_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'temporary_files', 'schedules')
+    os.makedirs(schedules_dir, exist_ok=True)
+    
+    # Always use schedule.csv as the filename
+    filepath = os.path.join(schedules_dir, 'schedule.csv')
+    
+    # Save to CSV
+    df.to_csv(filepath, index=False)
+    print(f"\nCreated dummy schedule with 5 entries, all at 7 PM starting tomorrow:")
+    print("\nScheduled files:")
+    for entry in schedule_entries:
+        print(f"- {entry['scheduled_file']} on {entry['scheduled_date']} at {entry['scheduled_time']} for {entry['platform']}")
+        print(f"  Caption: {entry['caption']}")
+    print(f"\nSchedule saved to: {filepath}")
+    return filepath
+
 def main():
-    if len(sys.argv) != 6:
-        print("Usage: python3 create_schedule.py <clip_filepath> <posting_date> <caption> <platform> <schedule_filename>")
+    if len(sys.argv) == 1:
+        # No arguments provided, create dummy schedule
+        create_dummy_schedule()
+    elif len(sys.argv) != 6:
+        print("Usage: python3 create_schedule.py [<clip_filepath> <posting_date> <caption> <platform> <schedule_filename>]")
+        print("If no arguments are provided, a dummy schedule will be created.")
         print("Example: python3 create_schedule.py /path/to/video.mp4 '2024-03-21 15:00' 'Fun video!' tiktok schedule.csv")
         sys.exit(1)
-    
-    clip_filepath = sys.argv[1]
-    posting_date = sys.argv[2]
-    caption = sys.argv[3]
-    platform = sys.argv[4]
-    schedule_filename = sys.argv[5]
-    
-    add_to_schedule(clip_filepath, posting_date, caption, platform, schedule_filename)
+    else:
+        # Normal operation with arguments
+        clip_filepath = sys.argv[1]
+        posting_date = sys.argv[2]
+        caption = sys.argv[3]
+        platform = sys.argv[4]
+        schedule_filename = sys.argv[5]
+        
+        add_to_schedule(clip_filepath, posting_date, caption, platform, schedule_filename)
 
 if __name__ == "__main__":
     main() 

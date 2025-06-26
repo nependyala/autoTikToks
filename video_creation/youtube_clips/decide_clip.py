@@ -1,11 +1,11 @@
 """
-Script to analyze video transcripts using GPT-4 and identify viral-worthy moments.
+Script to analyze video transcripts using Gemini and identify viral-worthy moments.
 """
 import os
 import json
 import sys
+import requests
 from typing import List, Dict
-from openai import OpenAI
 from dotenv import load_dotenv
 
 # Debug: Print current file location
@@ -22,14 +22,14 @@ print(f"File exists: {os.path.exists(env_path)}")
 load_dotenv(env_path)
 
 # Debug: Print environment variables
-print(f"OPENAI_API_KEY exists: {bool(os.getenv('OPENAI_API_KEY'))}")
+print(f"GEMINI_API_KEY exists: {bool(os.getenv('GEMINI_API_KEY'))}")
 
 def load_credentials():
     """Load credentials from environment variables."""
-    api_key = os.getenv('OPENAI_API_KEY')
+    api_key = os.getenv('GEMINI_API_KEY')
     if not api_key:
-        raise Exception("OpenAI API key not found in environment variables")
-    return {'OPENAI_API_KEY': api_key}
+        raise Exception("GEMINI_API_KEY not found in environment variables")
+    return {'GEMINI_API_KEY': api_key}
 
 def read_transcript(transcript_name: str) -> str:
     """
@@ -50,7 +50,7 @@ def read_transcript(transcript_name: str) -> str:
 
 def analyze_transcript(transcript_content: str) -> List[Dict]:
     """
-    Analyze transcript using GPT-4 to identify viral-worthy moments.
+    Analyze transcript using Gemini to identify viral-worthy moments.
     
     Args:
         transcript_content (str): Content of the transcript
@@ -98,36 +98,62 @@ Example response:
 
     try:
         credentials = load_credentials()
-        # Initialize OpenAI client
-        client = OpenAI(api_key=credentials.get('OPENAI_API_KEY'))
-        model = os.getenv('OPENAI_MODEL', 'gpt-4.1-mini-2025-04-14')
+        api_key = credentials.get('GEMINI_API_KEY')
         
-        print("Analyzing transcript...")
-        # Get response from OpenAI
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that analyzes video transcripts to find viral-worthy moments. You must respond with only a valid JSON array. Always refer to the speaker as Charlie in the titles. Each clip must be at least 15 seconds and never longer than 1:20. Keep titles under 7 words."},
-                {"role": "user", "content": f"Transcript text: {transcript_content}\n\nPrompt: {prompt}"}
+        # Gemini API endpoint
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+        
+        # Prepare the request payload
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": f"Transcript text: {transcript_content}\n\nPrompt: {prompt}"
+                        }
+                    ]
+                }
             ]
-        )
-
-        # Parse JSON response
-        try:
-            content = response.choices[0].message.content.replace('```json', '').replace('```', '').strip()
+        }
+        
+        headers = {
+            'Content-Type': 'application/json'
+        }
+        
+        print("Analyzing transcript with Gemini...")
+        
+        # Make the API request
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()  # Raise an exception for bad status codes
+        
+        # Parse the response
+        response_data = response.json()
+        
+        # Extract the text from Gemini response
+        if 'candidates' in response_data and len(response_data['candidates']) > 0:
+            content = response_data['candidates'][0]['content']['parts'][0]['text'].strip()
+        else:
+            raise Exception("No content found in Gemini response")
+        
+        print(f"Raw Gemini response: {content}")
+        
+        # Clean up the response string - remove markdown code blocks
+        content = content.replace('```json', '').replace('```', '').strip()
+        
+        # Clean up the response string
+        if not content.startswith('['):
+            content = '[' + content
+        if not content.endswith(']'):
+            content = content + ']'
             
-            # Clean up the response string
-            if not content.startswith('['):
-                content = '[' + content
-            if not content.endswith(']'):
-                content = content + ']'
-                
-            return json.loads(content)
-            
-        except json.JSONDecodeError as e:
-            print(f"Error parsing response: {str(e)}")
-            return []
-            
+        return json.loads(content)
+        
+    except json.JSONDecodeError as e:
+        print(f"Error parsing response: {str(e)}")
+        return []
+    except requests.exceptions.RequestException as e:
+        print(f"Error making API request: {str(e)}")
+        raise Exception(f"Error analyzing transcript: {str(e)}")
     except Exception as e:
         print(f"Error: {str(e)}")
         raise Exception(f"Error analyzing transcript: {str(e)}")

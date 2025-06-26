@@ -17,4 +17,12 @@ python-dateutil>=2.8.2
 
 # Added from the code block
 openai
-fal-client 
+fal-client
+pyautogui
+opencv-python
+pytesseract
+
+# Video processing and computer vision
+face-recognition>=1.3.0
+scenedetect>=0.6.2
+scikit-image>=0.22.0 

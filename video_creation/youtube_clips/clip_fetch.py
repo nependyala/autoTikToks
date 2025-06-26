@@ -45,8 +45,8 @@ def download_clip(url: str, start_time: str, end_time: str) -> str:
     """
     try:
         # Strict URL validation
-        if url != "https://www.youtube.com/watch?v=RywoFvefNOE":
-            raise ValueError("This script only supports downloading clips from https://www.youtube.com/watch?v=RywoFvefNOE")
+        # if url != "https://www.youtube.com/watch?v=RywoFvefNOE":
+        #     raise ValueError("This script only supports downloading clips from https://www.youtube.com/watch?v=RywoFvefNOE")
             
         # Convert timestamps to seconds
         start_seconds = convert_timestamp_to_seconds(start_time)
