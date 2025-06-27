@@ -567,11 +567,13 @@ class MoistCritikalVideoProcessor:
         # Maintain audio sync
         original_video = VideoFileClip(self.video_path)
         has_audio = original_video.audio is not None
-        original_audio = original_video.audio
         original_video.close()
         
         if has_audio:
-            final_video = final_video.with_audio(original_audio)
+            # Load audio separately to keep its reader independent
+            from moviepy.audio.io.AudioFileClip import AudioFileClip
+            audio_clip = AudioFileClip(self.video_path)
+            final_video = final_video.with_audio(audio_clip)
         else:
             final_video = final_video.without_audio()
         
