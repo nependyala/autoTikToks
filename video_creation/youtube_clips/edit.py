@@ -566,8 +566,14 @@ class MoistCritikalVideoProcessor:
         
         # Maintain audio sync
         original_video = VideoFileClip(self.video_path)
-        final_video = final_video.with_audio(original_video.audio)
+        has_audio = original_video.audio is not None
+        original_audio = original_video.audio
         original_video.close()
+        
+        if has_audio:
+            final_video = final_video.with_audio(original_audio)
+        else:
+            final_video = final_video.without_audio()
         
         # Create temporary output file
         temp_dir = tempfile.gettempdir()
@@ -575,7 +581,15 @@ class MoistCritikalVideoProcessor:
         temp_output_path = os.path.join(temp_dir, temp_filename)
         
         print(f"Writing temporary vertical video to: {temp_output_path}")
-        final_video.write_videofile(temp_output_path, fps=30, codec='libx264', audio_codec='aac', threads=4, preset='medium')
+        final_video.write_videofile(
+            temp_output_path,
+            fps=30,
+            codec='libx264',
+            audio=False if not has_audio else True,
+            audio_codec='aac' if has_audio else None,
+            threads=4,
+            preset='medium'
+        )
         print("Processing complete!")
         return temp_output_path
 
