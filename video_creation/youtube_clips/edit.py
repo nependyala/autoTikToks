@@ -633,7 +633,7 @@ class MoistCritikalVideoProcessor:
             # For freeze frames: preserve aspect ratio and add black bars
             # Calculate scaling to fit within 9:16 while preserving aspect ratio
             input_aspect = seg_clip.w / seg_clip.h
-            target_aspect = vertical_width / vertical_height  # 9:16 = 0.5625
+            target_aspect = vertical_width / vertical_height
             
             if input_aspect > target_aspect:
                 # Image is wider than target, fit by width
@@ -1220,48 +1220,53 @@ class MoistCritikalVideoProcessor:
             VideoFileClip: Processed subclip
         """
         if crop_strategy == 'face_crop':
-            # Face-centered crop for talking head segments
-            # Sample a frame to detect face location
-            sample_frame = subclip.get_frame(subclip.duration / 2)
-            rgb_frame = sample_frame[:, :, ::-1]  # Convert BGR to RGB
-            face_locations = face_recognition.face_locations(rgb_frame, model='hog')
-            
-            if face_locations:
-                # Use the first detected face
-                top, right, bottom, left = face_locations[0]
-                x_center = (left + right) // 2
-                y_center = (top + bottom) // 2
-                
-                # Calculate crop area to fit 9:16 aspect ratio
-                aspect_ratio = vertical_width / vertical_height
-                
-                if subclip.w / subclip.h > aspect_ratio:
-                    # Video is wider than 9:16, crop width
-                    crop_height = subclip.h
-                    crop_width = int(crop_height * aspect_ratio)
-                else:
-                    # Video is taller than 9:16, crop height
-                    crop_width = subclip.w
-                    crop_height = int(crop_width / aspect_ratio)
-                
-                # Center crop around face
-                x1 = max(0, x_center - crop_width // 2)
-                y1 = max(0, y_center - crop_height // 2)
-                x2 = min(subclip.w, x1 + crop_width)
-                y2 = min(subclip.h, y1 + crop_height)
-                
-                # Adjust if crop goes outside bounds
-                if x2 > subclip.w:
-                    x1 = subclip.w - crop_width
-                    x2 = subclip.w
-                if y2 > subclip.h:
-                    y1 = subclip.h - crop_height
-                    y2 = subclip.h
-                
-                subclip = subclip.cropped(x1=x1, y1=y1, x2=x2, y2=y2)
+            # Dynamic face-centered crop for talking head segments
+            if content_type == 'talking_head' and hasattr(self, 'dynamic_face_crop_enabled') and self.dynamic_face_crop_enabled:
+                # Use dynamic face cropping for smooth pan transitions
+                sample_interval = getattr(self, 'face_sample_interval', 30)
+                return self.apply_dynamic_face_cropping(subclip, vertical_width, vertical_height, sample_interval)
             else:
-                # No face detected, use center crop
-                subclip = self._apply_center_crop(subclip, vertical_width, vertical_height)
+                # Fallback to static face crop for other content types or when disabled
+                sample_frame = subclip.get_frame(subclip.duration / 2)
+                rgb_frame = sample_frame[:, :, ::-1]  # Convert BGR to RGB
+                face_locations = face_recognition.face_locations(rgb_frame, model='hog')
+                
+                if face_locations:
+                    # Use the first detected face
+                    top, right, bottom, left = face_locations[0]
+                    x_center = (left + right) // 2
+                    y_center = (top + bottom) // 2
+                    
+                    # Calculate crop area to fit 9:16 aspect ratio
+                    aspect_ratio = vertical_width / vertical_height
+                    
+                    if subclip.w / subclip.h > aspect_ratio:
+                        # Video is wider than 9:16, crop width
+                        crop_height = subclip.h
+                        crop_width = int(crop_height * aspect_ratio)
+                    else:
+                        # Video is taller than 9:16, crop height
+                        crop_width = subclip.w
+                        crop_height = int(crop_width / aspect_ratio)
+                    
+                    # Center crop around face
+                    x1 = max(0, x_center - crop_width // 2)
+                    y1 = max(0, y_center - crop_height // 2)
+                    x2 = min(subclip.w, x1 + crop_width)
+                    y2 = min(subclip.h, y1 + crop_height)
+                    
+                    # Adjust if crop goes outside bounds
+                    if x2 > subclip.w:
+                        x1 = subclip.w - crop_width
+                        x2 = subclip.w
+                    if y2 > subclip.h:
+                        y1 = subclip.h - crop_height
+                        y2 = subclip.h
+                    
+                    subclip = subclip.cropped(x1=x1, y1=y1, x2=x2, y2=y2)
+                else:
+                    # No face detected, use center crop
+                    subclip = self._apply_center_crop(subclip, vertical_width, vertical_height)
                 
         elif crop_strategy == 'center_crop':
             # Center crop for freeze frames and other content
@@ -1382,6 +1387,173 @@ class MoistCritikalVideoProcessor:
         
         return output_file
 
+    def detect_face_centers(self, video_path, sample_interval=30):
+        """
+        Detect face centers at sparse intervals for smooth pan transitions.
+        Returns lists of times and face-center coordinates detected every `sample_interval` frames.
+        Args:
+            video_path (str): Path to the video file
+            sample_interval (int): Number of frames to skip between samples
+        Returns:
+            tuple: (times, xs, ys) arrays of detected face centers
+        """
+        import cv2
+        import face_recognition
+        import numpy as np
+        
+        print(f"Detecting face centers with sample interval: {sample_interval}")
+        
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            print(f"Error: Could not open video file {video_path}")
+            return None, None, None
+        
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        centers = []
+        frame_idx = 0
+        
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if frame_idx % sample_interval == 0:
+                rgb = frame[:, :, ::-1]  # BGR→RGB
+                faces = face_recognition.face_locations(rgb, model="hog")
+                if faces:
+                    # Pick the largest face
+                    top, right, bottom, left = max(faces, key=lambda b: (b[2]-b[0])*(b[1]-b[3]))
+                    cx = (left + right) / 2
+                    cy = (top + bottom) / 2
+                    centers.append((frame_idx / fps, cx, cy))
+                
+                # Show progress
+                progress = (frame_idx / total_frames) * 100
+                print(f"\rFace center detection progress: {progress:.1f}%", end="", flush=True)
+            frame_idx += 1
+        
+        print()  # New line after progress
+        cap.release()
+        
+        if not centers:
+            print("Warning: No faces detected; cannot track.")
+            return None, None, None
+        
+        times, xs, ys = zip(*centers)
+        print(f"Detected {len(centers)} face centers")
+        return np.array(times), np.array(xs), np.array(ys)
+
+    def make_smooth_interpolators(self, times, xs, ys, kind="linear", smoothing_window=3):
+        """
+        Create smooth interpolators for face center trajectories.
+        Args:
+            times (np.array): Time points
+            xs (np.array): X coordinates
+            ys (np.array): Y coordinates
+            kind (str): Interpolation kind ('linear', 'cubic', etc.)
+            smoothing_window (int): Window size for smoothing
+        Returns:
+            tuple: (Xfunc, Yfunc) interpolator functions
+        """
+        import numpy as np
+        from scipy.interpolate import interp1d
+        
+        if len(times) < 2:
+            # If only one point, create constant functions
+            def constant_func(t):
+                return np.full_like(t, xs[0] if len(xs) > 0 else 0)
+            return constant_func, constant_func
+        
+        # Apply sliding-window mean to smooth the trajectory
+        if smoothing_window > 1 and len(xs) >= smoothing_window:
+            xs_smooth = np.convolve(xs, np.ones(smoothing_window)/smoothing_window, mode='same')
+            ys_smooth = np.convolve(ys, np.ones(smoothing_window)/smoothing_window, mode='same')
+        else:
+            xs_smooth = xs
+            ys_smooth = ys
+        
+        # Create interpolator functions
+        Xfunc = interp1d(times, xs_smooth, kind=kind,
+                         fill_value=(xs_smooth[0], xs_smooth[-1]), bounds_error=False)
+        Yfunc = interp1d(times, ys_smooth, kind=kind,
+                         fill_value=(ys_smooth[0], ys_smooth[-1]), bounds_error=False)
+        
+        return Xfunc, Yfunc
+
+    def dynamic_face_crop(self, clip, Xfunc, Yfunc, target_w, target_h):
+        """
+        Apply dynamic face-centered cropping to keep face centered smoothly.
+        Args:
+            clip: VideoFileClip to process
+            Xfunc: X-coordinate interpolator function
+            Yfunc: Y-coordinate interpolator function
+            target_w (int): Target crop width
+            target_h (int): Target crop height
+        Returns:
+            VideoFileClip: Dynamically cropped clip
+        """
+        import numpy as np
+        
+        def fl(gf, t):
+            frame = gf(t)  # RGB ndarray H×W×3
+            h, w = frame.shape[:2]
+            cx, cy = Xfunc(t), Yfunc(t)
+            
+            # Compute top-left corner for target crop
+            x1 = int(np.clip(cx - target_w/2, 0, w - target_w))
+            y1 = int(np.clip(cy - target_h/2, 0, h - target_h))
+            
+            # Extract crop
+            return frame[y1:y1+target_h, x1:x1+target_w]
+        
+        return clip.fl(fl, apply_to=["mask"])
+
+    def apply_dynamic_face_cropping(self, subclip, target_width, target_height, sample_interval=30):
+        """
+        Apply dynamic face-centered cropping to a subclip for smooth pan transitions.
+        Args:
+            subclip: VideoFileClip subclip to process
+            target_width (int): Target crop width
+            target_height (int): Target crop height
+            sample_interval (int): Frame sampling interval for face detection
+        Returns:
+            VideoFileClip: Dynamically cropped subclip
+        """
+        print(f"Applying dynamic face cropping to subclip...")
+        
+        # Save subclip to temporary file for face detection
+        import tempfile
+        import os
+        
+        temp_dir = tempfile.gettempdir()
+        temp_filename = f"temp_subclip_{os.path.basename(self.video_path)}"
+        temp_path = os.path.join(temp_dir, temp_filename)
+        
+        # Write subclip to temp file
+        subclip.write_videofile(temp_path, fps=30, codec='libx264', audio=False, verbose=False, logger=None)
+        
+        try:
+            # Detect face centers
+            times, xs, ys = self.detect_face_centers(temp_path, sample_interval)
+            
+            if times is None:
+                print("No faces detected, using center crop fallback")
+                return self._apply_center_crop(subclip, target_width, target_height)
+            
+            # Create smooth interpolators
+            Xfunc, Yfunc = self.make_smooth_interpolators(times, xs, ys, kind="linear", smoothing_window=3)
+            
+            # Apply dynamic cropping
+            cropped_clip = self.dynamic_face_crop(subclip, Xfunc, Yfunc, target_width, target_height)
+            
+            print("Dynamic face cropping applied successfully")
+            return cropped_clip
+            
+        finally:
+            # Clean up temp file
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
 def main():
     """
     Command-line interface for the MoistCritikalVideoProcessor.
@@ -1402,6 +1574,12 @@ Examples:
 
   # Frame-perfect crop transitions (recommended)
   python edit.py input.mp4 output.mp4 --frame-perfect
+
+  # Frame-perfect with dynamic face cropping (smooth pan transitions)
+  python edit.py input.mp4 output.mp4 --frame-perfect --dynamic-face-crop
+
+  # Dynamic face cropping with custom settings
+  python edit.py input.mp4 output.mp4 --frame-perfect --dynamic-face-crop --face-sample-interval 15 --smoothing-window 5
 
   # Frame-perfect with manual cut correction
   python edit.py input.mp4 output.mp4 --frame-perfect --manual-cuts
@@ -1424,11 +1602,14 @@ Examples:
   # Motion analysis
   python edit.py input.mp4 --analyze-motion
 
-  # Full pipeline with frame-perfect processing
-  python edit.py input.mp4 output.mp4 --full-pipeline --frame-perfect --progress
+  # Full pipeline with frame-perfect processing and dynamic face cropping
+  python edit.py input.mp4 output.mp4 --full-pipeline --frame-perfect --dynamic-face-crop --progress
 
   # Legacy segment-based processing (old method)
   python edit.py input.mp4 output.mp4 --legacy-mode
+
+  # Static face cropping (faster but less smooth)
+  python edit.py input.mp4 output.mp4 --frame-perfect --static-face-crop
         """
     )
     
@@ -1584,6 +1765,32 @@ Examples:
         help='Export detected cut frames to JSON file for manual review'
     )
     
+    parser.add_argument(
+        '--dynamic-face-crop',
+        action='store_true',
+        help='Use dynamic face-centered cropping for smooth pan transitions (default: enabled for talking head segments)'
+    )
+    
+    parser.add_argument(
+        '--face-sample-interval',
+        type=int,
+        default=30,
+        help='Frame sampling interval for dynamic face detection (default: 30)'
+    )
+    
+    parser.add_argument(
+        '--smoothing-window',
+        type=int,
+        default=3,
+        help='Smoothing window size for face trajectory (default: 3)'
+    )
+    
+    parser.add_argument(
+        '--static-face-crop',
+        action='store_true',
+        help='Use static face cropping instead of dynamic (faster but less smooth)'
+    )
+    
     # Parse arguments
     args = parser.parse_args()
     
@@ -1630,6 +1837,11 @@ Examples:
             face_detection_confidence=args.face_confidence,
             scene_threshold=args.scene_threshold
         )
+        
+        # Store dynamic face cropping options
+        processor.dynamic_face_crop_enabled = args.dynamic_face_crop or not args.static_face_crop
+        processor.face_sample_interval = args.face_sample_interval
+        processor.smoothing_window = args.smoothing_window
         
         # Run requested operations
         if args.export_cuts:
