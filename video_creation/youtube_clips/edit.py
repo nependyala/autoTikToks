@@ -540,6 +540,11 @@ class MoistCritikalVideoProcessor:
             # Step 5: Concatenate all processed clips
             final_video = concatenate_videoclips(processed_clips, method="compose")
             
+            # Close all subclips to prevent file handle leaks
+            for subclip_data in labeled_subclips:
+                if subclip_data['clip'] is not None:
+                    subclip_data['clip'].close()
+            
         else:
             # Legacy approach: use provided crop strategies
             print("Using legacy crop strategy approach...")
@@ -982,45 +987,53 @@ class MoistCritikalVideoProcessor:
             return []
         
         fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        # Use MoviePy's duration-based frame count for consistency
+        from moviepy import VideoFileClip
+        temp_video = VideoFileClip(self.video_path)
+        total_frames = int(temp_video.duration * fps)
+        temp_video.close()
+        
         print(f"Total frames: {total_frames}, FPS: {fps}")
         
         cut_frames = []
         prev_frame = None
         frame_number = 0
         
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            
-            if prev_frame is not None:
-                # Convert frames to grayscale for comparison
-                prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-                curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        try:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
                 
-                # Calculate SSIM
-                ssim_score, _ = ssim(prev_gray, curr_gray, full=True)
+                if prev_frame is not None:
+                    # Convert frames to grayscale for comparison
+                    prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+                    curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    
+                    # Calculate SSIM
+                    ssim_score, _ = ssim(prev_gray, curr_gray, full=True)
+                    
+                    # Calculate pixel difference
+                    diff = cv2.absdiff(prev_gray, curr_gray)
+                    pixel_diff = np.mean(diff)
+                    
+                    # Detect cut if either threshold is exceeded
+                    if ssim_score < ssim_threshold or pixel_diff > pixel_diff_threshold:
+                        cut_frames.append(frame_number)
+                        print(f"Cut detected at frame {frame_number} (SSIM: {ssim_score:.3f}, Pixel diff: {pixel_diff:.1f})")
                 
-                # Calculate pixel difference
-                diff = cv2.absdiff(prev_gray, curr_gray)
-                pixel_diff = np.mean(diff)
+                prev_frame = frame.copy()
+                frame_number += 1
                 
-                # Detect cut if either threshold is exceeded
-                if ssim_score < ssim_threshold or pixel_diff > pixel_diff_threshold:
-                    cut_frames.append(frame_number)
-                    print(f"Cut detected at frame {frame_number} (SSIM: {ssim_score:.3f}, Pixel diff: {pixel_diff:.1f})")
-            
-            prev_frame = frame.copy()
-            frame_number += 1
-            
-            # Show progress
-            if frame_number % 100 == 0:
-                progress = (frame_number / total_frames) * 100
-                print(f"\rHard cut detection progress: {progress:.1f}%", end="", flush=True)
+                # Show progress
+                if frame_number % 100 == 0:
+                    progress = (frame_number / total_frames) * 100
+                    print(f"\rHard cut detection progress: {progress:.1f}%", end="", flush=True)
+        finally:
+            cap.release()
         
         print()  # New line after progress
-        cap.release()
         
         # Always include frame 0 as the first cut
         if 0 not in cut_frames:
@@ -1048,9 +1061,12 @@ class MoistCritikalVideoProcessor:
         
         print(f"Splitting video at {len(cut_frames)} cut points...")
         
-        video = VideoFileClip(self.video_path)
-        fps = video.fps
-        total_frames = int(video.duration * fps)
+        # Get video properties without keeping the video open
+        temp_video = VideoFileClip(self.video_path)
+        fps = temp_video.fps
+        total_frames = int(temp_video.duration * fps)
+        temp_video.close()
+        
         subclips = []
         
         for i in range(len(cut_frames) - 1):
@@ -1066,16 +1082,16 @@ class MoistCritikalVideoProcessor:
             end_time = end_frame / fps
             
             # Ensure end_time doesn't exceed video duration
-            if end_time > video.duration:
-                end_time = video.duration
+            if end_time > (total_frames / fps):
+                end_time = total_frames / fps
             
             # Skip if start_time >= end_time
             if start_time >= end_time:
                 print(f"Warning: Skipping subclip {i+1} (start_time >= end_time)")
                 continue
             
-            # Create subclip
-            subclip = video.subclipped(start_time, end_time)
+            # Create independent subclip with its own reader
+            subclip = VideoFileClip(self.video_path).subclipped(start_time, end_time)
             subclips.append({
                 'index': i,
                 'start_frame': start_frame,
@@ -1088,7 +1104,6 @@ class MoistCritikalVideoProcessor:
             
             print(f"Subclip {i+1}: frames {start_frame}-{end_frame} ({start_time:.2f}s - {end_time:.2f}s)")
         
-        video.close()
         print(f"Created {len(subclips)} subclips")
         return subclips
 
@@ -1112,6 +1127,10 @@ class MoistCritikalVideoProcessor:
         for i, subclip_data in enumerate(subclips):
             subclip = subclip_data['clip']
             duration = subclip_data['duration']
+            
+            # Sanity check for None subclips
+            if subclip is None:
+                raise ValueError(f"Subclip {i+1} is None, check split_video_at_cuts logic")
             
             # Sample frames from the subclip
             sample_times = np.linspace(0, duration, sample_frames + 2)[1:-1]  # Skip start and end
