@@ -1027,7 +1027,7 @@ class MoistCritikalVideoProcessor:
             cut_frames.insert(0, 0)
         
         # Always include the last frame as the final cut
-        if total_frames - 1 not in cut_frames:
+        if (total_frames - 1) not in cut_frames:
             cut_frames.append(total_frames - 1)
         
         # Sort and remove duplicates
@@ -1050,15 +1050,29 @@ class MoistCritikalVideoProcessor:
         
         video = VideoFileClip(self.video_path)
         fps = video.fps
+        total_frames = int(video.duration * fps)
         subclips = []
         
         for i in range(len(cut_frames) - 1):
             start_frame = cut_frames[i]
             end_frame = cut_frames[i + 1]
             
+            # Ensure we don't exceed video duration
+            if end_frame > total_frames:
+                end_frame = total_frames
+            
             # Convert frame numbers to time
             start_time = start_frame / fps
             end_time = end_frame / fps
+            
+            # Ensure end_time doesn't exceed video duration
+            if end_time > video.duration:
+                end_time = video.duration
+            
+            # Skip if start_time >= end_time
+            if start_time >= end_time:
+                print(f"Warning: Skipping subclip {i+1} (start_time >= end_time)")
+                continue
             
             # Create subclip
             subclip = video.subclipped(start_time, end_time)
