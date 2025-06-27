@@ -237,16 +237,53 @@ class MoistCritikalVideoProcessor:
                     return True
             return False
 
-        # For each scene, classify
+        # Get video properties for frame calculations
+        fps = self._get_fps()
+        total_frames = self._get_total_frames()
+        
+        # First pass: classify segments and collect freeze frame adjustments
+        segment_data = []
+        freeze_frame_adjustments = {}
+        
         for i, (start_time, end_time) in enumerate(self.scene_boundaries):
+            # Convert time boundaries to frame numbers
+            start_frame = int(self._time_to_seconds(start_time) * fps)
+            end_frame = int(self._time_to_seconds(end_time) * fps)
+            
             # Find frames in this segment with faces
-            frames_with_faces = [f for f in self.face_locations if start_time <= self._frame_to_time(f) <= end_time]
+            frames_with_faces = [f for f in self.face_locations if start_frame <= f <= end_frame]
             # Check if this segment is a freeze frame
             static = is_static(start_time) and is_static(end_time)
             # Heuristic: classify
             if static:
                 segment_type = 'freeze_frame'
                 crop_strategy = 'center_crop'
+                
+                # Add buffer to freeze frame segments for tighter crop transitions (in frames)
+                # Only add buffer to start_time, not subtract from end_time
+                buffer_seconds = 0.2
+                buffer_frames = int(buffer_seconds * fps)
+                
+                # Add buffer to start frame (but don't go below 0)
+                buffered_start_frame = max(0, start_frame + buffer_frames)
+                # Keep end frame unchanged for immediate transition back to talking head
+                buffered_end_frame = end_frame
+                
+                # Convert back to time strings
+                buffered_start_time = self._frame_to_time(buffered_start_frame)
+                buffered_end_time = self._frame_to_time(buffered_end_frame)
+                
+                # Store adjustment for later use
+                freeze_frame_adjustments[i] = {
+                    'original_start': start_time,
+                    'original_end': end_time,
+                    'adjusted_start': buffered_start_time,
+                    'adjusted_end': buffered_end_time
+                }
+                
+                start_time = buffered_start_time
+                end_time = buffered_end_time
+                
             elif frames_with_faces:
                 segment_type = 'talking_head'
                 crop_strategy = 'face_crop'
@@ -258,16 +295,48 @@ class MoistCritikalVideoProcessor:
             if duration < 1.0:
                 segment_type = 'transition'
                 crop_strategy = 'full_frame'
-            segments.append({
+            
+            segment_data.append({
                 'index': i+1,
                 'start_time': start_time,
                 'end_time': end_time,
                 'duration': duration,
                 'type': segment_type,
                 'crop_strategy': crop_strategy,
-                'frames_with_faces': frames_with_faces
+                'frames_with_faces': frames_with_faces,
+                'is_freeze_frame': static
             })
-            print(f"Segment {i+1}: {start_time} --> {end_time} | {segment_type} | Crop: {crop_strategy}")
+        
+        # Second pass: adjust adjacent segment boundaries
+        for i, segment in enumerate(segment_data):
+            if segment['is_freeze_frame'] and i in freeze_frame_adjustments:
+                adjustment = freeze_frame_adjustments[i]
+                
+                # Adjust previous segment's end_time to match freeze frame start_time
+                if i > 0:
+                    prev_segment = segment_data[i-1]
+                    prev_segment['end_time'] = adjustment['adjusted_start']
+                    prev_segment['duration'] = self._time_to_seconds(prev_segment['end_time']) - self._time_to_seconds(prev_segment['start_time'])
+                
+                # Adjust next segment's start_time to match freeze frame end_time
+                if i < len(segment_data) - 1:
+                    next_segment = segment_data[i+1]
+                    next_segment['start_time'] = adjustment['adjusted_end']
+                    next_segment['duration'] = self._time_to_seconds(next_segment['end_time']) - self._time_to_seconds(next_segment['start_time'])
+        
+        # Convert to final segments list
+        for segment in segment_data:
+            segments.append({
+                'index': segment['index'],
+                'start_time': segment['start_time'],
+                'end_time': segment['end_time'],
+                'duration': segment['duration'],
+                'type': segment['type'],
+                'crop_strategy': segment['crop_strategy'],
+                'frames_with_faces': segment['frames_with_faces']
+            })
+            print(f"Segment {segment['index']}: {segment['start_time']} --> {segment['end_time']} | {segment['type']} | Crop: {segment['crop_strategy']}")
+        
         return segments
 
     def _frame_to_time(self, frame_number):
@@ -288,6 +357,28 @@ class MoistCritikalVideoProcessor:
         fps = cap.get(cv2.CAP_PROP_FPS)
         cap.release()
         return fps 
+
+    def _get_video_duration(self):
+        """Get the total duration of the video in seconds."""
+        import cv2
+        cap = cv2.VideoCapture(self.video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+        return total_frames / fps if fps > 0 else 0
+
+    def _get_total_frames(self):
+        """Get the total number of frames in the video."""
+        import cv2
+        cap = cv2.VideoCapture(self.video_path)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+        return total_frames
+
+    def _seconds_to_time(self, seconds):
+        """Convert seconds to HH:MM:SS string format."""
+        import datetime
+        return str(datetime.timedelta(seconds=int(seconds)))
 
     def analyze_motion_levels(self):
         """
@@ -397,123 +488,181 @@ class MoistCritikalVideoProcessor:
             print(f"Segment {seg['index']}: {seg['type']} | Crop: {crop['strategy']} | x: {crop['x']} y: {crop['y']} zoom: {crop['zoom']}")
         return crop_results 
 
-    def process_to_vertical_format(self, crop_strategies, output_resolution=(1080, 1920)):
+    def process_to_vertical_format(self, crop_strategies=None, output_resolution=(1080, 1920), use_frame_perfect=True, cut_frames=None):
         """
-        Process the original video into a 9:16 vertical format using the provided cropping strategies.
+        Process the original video into a 9:16 vertical format using frame-perfect crop transitions.
         Args:
-            crop_strategies (list): List of cropping parameter dicts for each segment.
-            output_resolution (tuple): (width, height) for the output video (default: 1080x1920).
+            crop_strategies (list): List of cropping parameter dicts for each segment (optional if use_frame_perfect=True)
+            output_resolution (tuple): (width, height) for the output video (default: 1080x1920)
+            use_frame_perfect (bool): Whether to use frame-perfect cut detection (default: True)
+            cut_frames (list): Pre-detected cut frames (optional)
         Returns:
-            str: Path to the final processed video.
+            str: Path to the temporary processed video file
         """
-        from moviepy import VideoFileClip, concatenate_videoclips
+        from moviepy import VideoFileClip, concatenate_videoclips, ColorClip, CompositeVideoClip
         import numpy as np
         import os
+        import tempfile
 
         print("\nProcessing video to vertical 9:16 format...")
         vertical_width, vertical_height = output_resolution
-        clips = []
-        video = VideoFileClip(self.video_path)
         
-        for i, crop in enumerate(crop_strategies):
-            start = self._time_to_seconds(crop['start_time'])
-            end = self._time_to_seconds(crop['end_time'])
-            seg_clip = video.subclipped(start, end)
+        if use_frame_perfect:
+            # Frame-perfect approach: detect cuts, split, label, and crop individually
+            print("Using frame-perfect crop transitions...")
             
-            # Single crop to 9:16 format based on strategy
-            if crop['strategy'] == 'face_centered' and crop['x'] is not None and crop['y'] is not None:
-                # Face-centered crop: center on the detected face
-                x_center, y_center = crop['x'], crop['y']
-                # Calculate crop area to fit 9:16 aspect ratio
-                aspect_ratio = vertical_width / vertical_height  # 9:16 = 0.5625
-                
-                # Calculate crop dimensions
-                if seg_clip.w / seg_clip.h > aspect_ratio:
-                    # Video is wider than 9:16, crop width
-                    crop_height = seg_clip.h
-                    crop_width = int(crop_height * aspect_ratio)
-                else:
-                    # Video is taller than 9:16, crop height
-                    crop_width = seg_clip.w
-                    crop_height = int(crop_width / aspect_ratio)
-                
-                # Center crop around face
-                x1 = max(0, x_center - crop_width // 2)
-                y1 = max(0, y_center - crop_height // 2)
-                x2 = min(seg_clip.w, x1 + crop_width)
-                y2 = min(seg_clip.h, y1 + crop_height)
-                
-                # Adjust if crop goes outside bounds
-                if x2 > seg_clip.w:
-                    x1 = seg_clip.w - crop_width
-                    x2 = seg_clip.w
-                if y2 > seg_clip.h:
-                    y1 = seg_clip.h - crop_height
-                    y2 = seg_clip.h
-                
-                seg_clip = seg_clip.cropped(x1=x1, y1=y1, x2=x2, y2=y2)
-                
-            elif crop['strategy'] == 'center_crop':
-                # For freeze frames: preserve aspect ratio and add black bars
-                # Calculate scaling to fit within 9:16 while preserving aspect ratio
-                input_aspect = seg_clip.w / seg_clip.h
-                target_aspect = vertical_width / vertical_height  # 9:16 = 0.5625
-                
-                if input_aspect > target_aspect:
-                    # Image is wider than target, fit by width
-                    new_width = vertical_width
-                    new_height = int(vertical_width / input_aspect)
-                else:
-                    # Image is taller than target, fit by height  
-                    new_height = vertical_height
-                    new_width = int(vertical_height * input_aspect)
-                
-                # Resize while preserving aspect ratio
-                seg_clip = seg_clip.resized(new_size=(new_width, new_height))
-                
-                # Create black background and composite the resized clip centered
-                from moviepy import ColorClip
-                black_bg = ColorClip(size=(vertical_width, vertical_height), 
-                                    color=(0,0,0), duration=seg_clip.duration)
-                
-                # Center the resized clip on the black background
-                seg_clip = seg_clip.with_position('center')
-                seg_clip = CompositeVideoClip([black_bg, seg_clip])
-            else:
-                # For other types (transitions, etc.): simple center crop
-                aspect_ratio = vertical_width / vertical_height
-                if seg_clip.w / seg_clip.h > aspect_ratio:
-                    crop_height = seg_clip.h
-                    crop_width = int(crop_height * aspect_ratio)
-                else:
-                    crop_width = seg_clip.w
-                    crop_height = int(crop_width / aspect_ratio)
-                
-                x1 = (seg_clip.w - crop_width) // 2
-                y1 = (seg_clip.h - crop_height) // 2
-                x2 = x1 + crop_width
-                y2 = y1 + crop_height
-                
-                seg_clip = seg_clip.cropped(x1=x1, y1=y1, x2=x2, y2=y2)
+            # Step 1: Detect hard cuts (if not provided)
+            if cut_frames is None:
+                cut_frames = self.detect_hard_cuts()
             
-            # Final resize to exact output dimensions
-            seg_clip = seg_clip.resized(new_size=(vertical_width, vertical_height))
-            clips.append(seg_clip)
-        
-        # Concatenate clips
-        final_video = concatenate_videoclips(clips, method="compose")
+            # Step 2: Split video at cuts
+            subclips = self.split_video_at_cuts(cut_frames)
+            
+            # Step 3: Label subclips with content type
+            labeled_subclips = self.label_subclips(subclips)
+            
+            # Step 4: Process each subclip individually
+            processed_clips = []
+            for i, subclip_data in enumerate(labeled_subclips):
+                print(f"Processing subclip {i+1}/{len(labeled_subclips)}: {subclip_data['content_type']}")
+                
+                # Apply crop strategy based on content type
+                processed_clip = self._apply_crop_strategy_to_subclip(
+                    subclip_data['clip'], 
+                    subclip_data['crop_strategy'], 
+                    subclip_data['content_type'],
+                    vertical_width, 
+                    vertical_height
+                )
+                
+                processed_clips.append(processed_clip)
+            
+            # Step 5: Concatenate all processed clips
+            final_video = concatenate_videoclips(processed_clips, method="compose")
+            
+        else:
+            # Legacy approach: use provided crop strategies
+            print("Using legacy crop strategy approach...")
+            clips = []
+            video = VideoFileClip(self.video_path)
+            
+            for i, crop in enumerate(crop_strategies):
+                start = self._time_to_seconds(crop['start_time'])
+                end = self._time_to_seconds(crop['end_time'])
+                seg_clip = video.subclipped(start, end)
+                
+                # Apply single crop strategy for the entire segment
+                seg_clip = self._apply_single_crop_strategy(seg_clip, crop, vertical_width, vertical_height)
+                clips.append(seg_clip)
+            
+            # Concatenate clips
+            final_video = concatenate_videoclips(clips, method="compose")
+            video.close()
         
         # Maintain audio sync
-        final_video = final_video.with_audio(video.audio)
+        original_video = VideoFileClip(self.video_path)
+        final_video = final_video.with_audio(original_video.audio)
+        original_video.close()
         
-        # Output path
-        output_path = self.output_path
-        if not output_path.endswith('.mp4'):
-            output_path += '.mp4'
-        print(f"Writing final vertical video to: {output_path}")
-        final_video.write_videofile(output_path, fps=30, codec='libx264', audio_codec='aac', threads=4, preset='medium')
+        # Create temporary output file
+        temp_dir = tempfile.gettempdir()
+        temp_filename = f"temp_vertical_processed_{os.path.basename(self.video_path)}"
+        temp_output_path = os.path.join(temp_dir, temp_filename)
+        
+        print(f"Writing temporary vertical video to: {temp_output_path}")
+        final_video.write_videofile(temp_output_path, fps=30, codec='libx264', audio_codec='aac', threads=4, preset='medium')
         print("Processing complete!")
-        return output_path
+        return temp_output_path
+
+    def _apply_single_crop_strategy(self, seg_clip, crop, vertical_width, vertical_height):
+        """Apply a single crop strategy to a segment."""
+        if crop['strategy'] == 'face_centered' and crop['x'] is not None and crop['y'] is not None:
+            # Face-centered crop: center on the detected face
+            x_center, y_center = crop['x'], crop['y']
+            # Calculate crop area to fit 9:16 aspect ratio
+            aspect_ratio = vertical_width / vertical_height
+            
+            # Calculate crop dimensions
+            if seg_clip.w / seg_clip.h > aspect_ratio:
+                # Video is wider than 9:16, crop width
+                crop_height = seg_clip.h
+                crop_width = int(crop_height * aspect_ratio)
+            else:
+                # Video is taller than 9:16, crop height
+                crop_width = seg_clip.w
+                crop_height = int(crop_width / aspect_ratio)
+            
+            # Center crop around face
+            x1 = max(0, x_center - crop_width // 2)
+            y1 = max(0, y_center - crop_height // 2)
+            x2 = min(seg_clip.w, x1 + crop_width)
+            y2 = min(seg_clip.h, y1 + crop_height)
+            
+            # Adjust if crop goes outside bounds
+            if x2 > seg_clip.w:
+                x1 = seg_clip.w - crop_width
+                x2 = seg_clip.w
+            if y2 > seg_clip.h:
+                y1 = seg_clip.h - crop_height
+                y2 = seg_clip.h
+            
+            seg_clip = seg_clip.cropped(x1=x1, y1=y1, x2=x2, y2=y2)
+            
+        elif crop['strategy'] == 'center_crop':
+            # For freeze frames: preserve aspect ratio and add black bars
+            # Calculate scaling to fit within 9:16 while preserving aspect ratio
+            input_aspect = seg_clip.w / seg_clip.h
+            target_aspect = vertical_width / vertical_height  # 9:16 = 0.5625
+            
+            if input_aspect > target_aspect:
+                # Image is wider than target, fit by width
+                new_width = vertical_width
+                new_height = int(vertical_width / input_aspect)
+            else:
+                # Image is taller than target, fit by height  
+                new_height = vertical_height
+                new_width = int(vertical_height * input_aspect)
+            
+            # Resize while preserving aspect ratio
+            seg_clip = seg_clip.resized(new_size=(new_width, new_height))
+            
+            # Create black background and composite the resized clip centered
+            from moviepy import ColorClip
+            black_bg = ColorClip(size=(vertical_width, vertical_height), 
+                                color=(0,0,0), duration=seg_clip.duration)
+            
+            # Center the resized clip on the black background
+            seg_clip = seg_clip.with_position('center')
+            seg_clip = CompositeVideoClip([black_bg, seg_clip])
+            
+        else:
+            # For other types (transitions, etc.): simple center crop
+            aspect_ratio = vertical_width / vertical_height
+            if seg_clip.w / seg_clip.h > aspect_ratio:
+                crop_height = seg_clip.h
+                crop_width = int(crop_height * aspect_ratio)
+            else:
+                crop_width = seg_clip.w
+                crop_height = int(crop_width / aspect_ratio)
+            
+            x1 = (seg_clip.w - crop_width) // 2
+            y1 = (seg_clip.h - crop_height) // 2
+            x2 = x1 + crop_width
+            y2 = y1 + crop_height
+            
+            seg_clip = seg_clip.cropped(x1=x1, y1=y1, x2=x2, y2=y2)
+        
+        # Final resize to exact output dimensions
+        seg_clip = seg_clip.resized(new_size=(vertical_width, vertical_height))
+        return seg_clip
+
+    def _apply_dynamic_crop_switching(self, seg_clip, start_frame, end_frame, static_frames, face_frames, crop, vertical_width, vertical_height, fps):
+        """Apply dynamic crop switching based on frame content."""
+        # For now, use the single crop strategy as a fallback
+        # In a full implementation, this would process frame by frame
+        # and switch crop strategies based on content detection
+        print(f"Dynamic crop switching not fully implemented, using fallback strategy")
+        return self._apply_single_crop_strategy(seg_clip, crop, vertical_width, vertical_height)
 
     def finalize_video_output(self, input_video_path=None, quality_preset='medium', custom_bitrate=None, 
                             target_platform='tiktok', add_metadata=True, progress_callback=None):
@@ -543,13 +692,15 @@ class MoistCritikalVideoProcessor:
             if not input_video_path.endswith('.mp4'):
                 input_video_path += '.mp4'
         
-        # Create output filename with quality indicator
-        base_name = os.path.splitext(input_video_path)[0]
-        output_path = f"{base_name}_finalized_{quality_preset}.mp4"
+        # Create final output filename with quality indicator
+        base_name = os.path.splitext(self.output_path)[0]
+        if not self.output_path.endswith('.mp4'):
+            base_name = self.output_path
+        final_output_path = f"{base_name}_finalized_{quality_preset}.mp4"
         
         print(f"\nFinalizing video output...")
         print(f"Input: {input_video_path}")
-        print(f"Output: {output_path}")
+        print(f"Final output: {final_output_path}")
         print(f"Quality: {quality_preset}")
         print(f"Platform: {target_platform}")
         
@@ -637,7 +788,7 @@ class MoistCritikalVideoProcessor:
                 ffmpeg_cmd.extend(['-metadata', f'{key}={value}'])
         
         # Add output path
-        ffmpeg_cmd.append(output_path)
+        ffmpeg_cmd.append(final_output_path)
         
         update_progress(10, "Starting FFmpeg encoding...")
         
@@ -680,16 +831,39 @@ class MoistCritikalVideoProcessor:
                 update_progress(95, "Encoding completed successfully!")
                 
                 # Verify output file
-                if os.path.exists(output_path):
-                    file_size = os.path.getsize(output_path) / (1024 * 1024)  # MB
+                if os.path.exists(final_output_path):
+                    file_size = os.path.getsize(final_output_path) / (1024 * 1024)  # MB
                     update_progress(100, f"Finalization complete! File size: {file_size:.1f} MB")
                     
                     # Optional: Run additional optimization for high quality
                     if quality_preset == 'high':
                         update_progress(100, "Running additional quality optimization...")
-                        self._optimize_for_high_quality(output_path)
+                        self._optimize_for_high_quality(final_output_path)
                     
-                    return output_path
+                    # Clean up temporary input file if it's different from self.output_path
+                    if (input_video_path != self.output_path and 
+                        input_video_path != self.video_path and 
+                        os.path.exists(input_video_path)):
+                        try:
+                            os.remove(input_video_path)
+                            print(f"Cleaned up temporary file: {input_video_path}")
+                        except Exception as e:
+                            print(f"Warning: Could not delete temporary file {input_video_path}: {e}")
+                    
+                    # Clean up any other temporary files in temp directory
+                    import tempfile
+                    temp_dir = tempfile.gettempdir()
+                    temp_pattern = f"temp_vertical_processed_{os.path.basename(self.video_path)}"
+                    for temp_file in os.listdir(temp_dir):
+                        if temp_file.startswith("temp_vertical_processed_") and temp_file.endswith(".mp4"):
+                            temp_file_path = os.path.join(temp_dir, temp_file)
+                            try:
+                                os.remove(temp_file_path)
+                                print(f"Cleaned up additional temporary file: {temp_file_path}")
+                            except Exception as e:
+                                print(f"Warning: Could not delete temporary file {temp_file_path}: {e}")
+                    
+                    return final_output_path
                 else:
                     print("Error: Output file was not created")
                     return None
@@ -787,6 +961,378 @@ class MoistCritikalVideoProcessor:
             print(f"Error getting video info: {e}")
             return None 
 
+    def detect_hard_cuts(self, ssim_threshold=0.7, pixel_diff_threshold=40):
+        """
+        Detect exact frame numbers where hard visual cuts occur.
+        Args:
+            ssim_threshold (float): SSIM threshold for cut detection (default: 0.7)
+            pixel_diff_threshold (int): Pixel difference threshold (default: 40)
+        Returns:
+            list: Sorted list of frame numbers where cuts occur
+        """
+        import cv2
+        import numpy as np
+        from skimage.metrics import structural_similarity as ssim
+        
+        print(f"Detecting hard cuts in video: {self.video_path}")
+        
+        cap = cv2.VideoCapture(self.video_path)
+        if not cap.isOpened():
+            print(f"Error: Could not open video file {self.video_path}")
+            return []
+        
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        print(f"Total frames: {total_frames}, FPS: {fps}")
+        
+        cut_frames = []
+        prev_frame = None
+        frame_number = 0
+        
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            if prev_frame is not None:
+                # Convert frames to grayscale for comparison
+                prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+                curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                
+                # Calculate SSIM
+                ssim_score, _ = ssim(prev_gray, curr_gray, full=True)
+                
+                # Calculate pixel difference
+                diff = cv2.absdiff(prev_gray, curr_gray)
+                pixel_diff = np.mean(diff)
+                
+                # Detect cut if either threshold is exceeded
+                if ssim_score < ssim_threshold or pixel_diff > pixel_diff_threshold:
+                    cut_frames.append(frame_number)
+                    print(f"Cut detected at frame {frame_number} (SSIM: {ssim_score:.3f}, Pixel diff: {pixel_diff:.1f})")
+            
+            prev_frame = frame.copy()
+            frame_number += 1
+            
+            # Show progress
+            if frame_number % 100 == 0:
+                progress = (frame_number / total_frames) * 100
+                print(f"\rHard cut detection progress: {progress:.1f}%", end="", flush=True)
+        
+        print()  # New line after progress
+        cap.release()
+        
+        # Always include frame 0 as the first cut
+        if 0 not in cut_frames:
+            cut_frames.insert(0, 0)
+        
+        # Always include the last frame as the final cut
+        if total_frames - 1 not in cut_frames:
+            cut_frames.append(total_frames - 1)
+        
+        # Sort and remove duplicates
+        cut_frames = sorted(list(set(cut_frames)))
+        
+        print(f"Detected {len(cut_frames)} hard cuts: {cut_frames}")
+        return cut_frames
+
+    def split_video_at_cuts(self, cut_frames):
+        """
+        Split the video into subclips at the exact cut frames.
+        Args:
+            cut_frames (list): List of frame numbers where cuts occur
+        Returns:
+            list: List of VideoFileClip subclips
+        """
+        from moviepy import VideoFileClip
+        
+        print(f"Splitting video at {len(cut_frames)} cut points...")
+        
+        video = VideoFileClip(self.video_path)
+        fps = video.fps
+        subclips = []
+        
+        for i in range(len(cut_frames) - 1):
+            start_frame = cut_frames[i]
+            end_frame = cut_frames[i + 1]
+            
+            # Convert frame numbers to time
+            start_time = start_frame / fps
+            end_time = end_frame / fps
+            
+            # Create subclip
+            subclip = video.subclipped(start_time, end_time)
+            subclips.append({
+                'index': i,
+                'start_frame': start_frame,
+                'end_frame': end_frame,
+                'start_time': start_time,
+                'end_time': end_time,
+                'duration': end_time - start_time,
+                'clip': subclip
+            })
+            
+            print(f"Subclip {i+1}: frames {start_frame}-{end_frame} ({start_time:.2f}s - {end_time:.2f}s)")
+        
+        video.close()
+        print(f"Created {len(subclips)} subclips")
+        return subclips
+
+    def label_subclips(self, subclips, sample_frames=3):
+        """
+        Label each subclip with content type and crop strategy.
+        Args:
+            subclips (list): List of subclip dictionaries from split_video_at_cuts
+            sample_frames (int): Number of frames to sample for analysis
+        Returns:
+            list: List of labeled subclips with content type and crop strategy
+        """
+        import cv2
+        import numpy as np
+        from skimage.metrics import structural_similarity as ssim
+        
+        print(f"Labeling {len(subclips)} subclips...")
+        
+        labeled_subclips = []
+        
+        for i, subclip_data in enumerate(subclips):
+            subclip = subclip_data['clip']
+            duration = subclip_data['duration']
+            
+            # Sample frames from the subclip
+            sample_times = np.linspace(0, duration, sample_frames + 2)[1:-1]  # Skip start and end
+            frames = []
+            
+            for t in sample_times:
+                frame = subclip.get_frame(t)
+                frames.append(frame)
+            
+            # Analyze for static content (freeze frame)
+            is_static = True
+            if len(frames) > 1:
+                for j in range(1, len(frames)):
+                    # Convert to grayscale
+                    prev_gray = cv2.cvtColor(frames[j-1], cv2.COLOR_RGB2GRAY)
+                    curr_gray = cv2.cvtColor(frames[j], cv2.COLOR_RGB2GRAY)
+                    
+                    # Calculate SSIM
+                    ssim_score, _ = ssim(prev_gray, curr_gray, full=True)
+                    
+                    if ssim_score < 0.95:  # High threshold for static detection
+                        is_static = False
+                        break
+            
+            # Analyze for face content
+            has_faces = False
+            for frame in frames:
+                # Convert BGR to RGB for face_recognition
+                rgb_frame = frame[:, :, ::-1]
+                face_locations = face_recognition.face_locations(rgb_frame, model='hog')
+                if face_locations:
+                    has_faces = True
+                    break
+            
+            # Determine content type and crop strategy
+            if is_static:
+                content_type = 'freeze_frame'
+                crop_strategy = 'center_crop'
+            elif has_faces:
+                content_type = 'talking_head'
+                crop_strategy = 'face_crop'
+            else:
+                content_type = 'video_clip'
+                crop_strategy = 'smart_crop'
+            
+            # Add labels to subclip data
+            labeled_subclip = subclip_data.copy()
+            labeled_subclip.update({
+                'content_type': content_type,
+                'crop_strategy': crop_strategy,
+                'is_static': is_static,
+                'has_faces': has_faces
+            })
+            
+            labeled_subclips.append(labeled_subclip)
+            
+            print(f"Subclip {i+1}: {content_type} | Crop: {crop_strategy} | Duration: {duration:.2f}s")
+        
+        return labeled_subclips
+
+    def _apply_crop_strategy_to_subclip(self, subclip, crop_strategy, content_type, vertical_width, vertical_height):
+        """
+        Apply crop strategy to a single subclip based on its content type.
+        Args:
+            subclip: VideoFileClip subclip
+            crop_strategy (str): Crop strategy to apply
+            content_type (str): Type of content in the subclip
+            vertical_width (int): Target width
+            vertical_height (int): Target height
+        Returns:
+            VideoFileClip: Processed subclip
+        """
+        if crop_strategy == 'face_crop':
+            # Face-centered crop for talking head segments
+            # Sample a frame to detect face location
+            sample_frame = subclip.get_frame(subclip.duration / 2)
+            rgb_frame = sample_frame[:, :, ::-1]  # Convert BGR to RGB
+            face_locations = face_recognition.face_locations(rgb_frame, model='hog')
+            
+            if face_locations:
+                # Use the first detected face
+                top, right, bottom, left = face_locations[0]
+                x_center = (left + right) // 2
+                y_center = (top + bottom) // 2
+                
+                # Calculate crop area to fit 9:16 aspect ratio
+                aspect_ratio = vertical_width / vertical_height
+                
+                if subclip.w / subclip.h > aspect_ratio:
+                    # Video is wider than 9:16, crop width
+                    crop_height = subclip.h
+                    crop_width = int(crop_height * aspect_ratio)
+                else:
+                    # Video is taller than 9:16, crop height
+                    crop_width = subclip.w
+                    crop_height = int(crop_width / aspect_ratio)
+                
+                # Center crop around face
+                x1 = max(0, x_center - crop_width // 2)
+                y1 = max(0, y_center - crop_height // 2)
+                x2 = min(subclip.w, x1 + crop_width)
+                y2 = min(subclip.h, y1 + crop_height)
+                
+                # Adjust if crop goes outside bounds
+                if x2 > subclip.w:
+                    x1 = subclip.w - crop_width
+                    x2 = subclip.w
+                if y2 > subclip.h:
+                    y1 = subclip.h - crop_height
+                    y2 = subclip.h
+                
+                subclip = subclip.cropped(x1=x1, y1=y1, x2=x2, y2=y2)
+            else:
+                # No face detected, use center crop
+                subclip = self._apply_center_crop(subclip, vertical_width, vertical_height)
+                
+        elif crop_strategy == 'center_crop':
+            # Center crop for freeze frames and other content
+            subclip = self._apply_center_crop(subclip, vertical_width, vertical_height)
+            
+        elif crop_strategy == 'smart_crop':
+            # Smart crop for video clips - analyze content focus
+            # For now, use center crop as fallback
+            subclip = self._apply_center_crop(subclip, vertical_width, vertical_height)
+            
+        else:
+            # Default to center crop
+            subclip = self._apply_center_crop(subclip, vertical_width, vertical_height)
+        
+        # Final resize to exact output dimensions
+        subclip = subclip.resized(new_size=(vertical_width, vertical_height))
+        return subclip
+    
+    def _apply_center_crop(self, clip, vertical_width, vertical_height):
+        """
+        Apply center crop with aspect ratio preservation and black bars for freeze frames.
+        """
+        # Calculate scaling to fit within 9:16 while preserving aspect ratio
+        input_aspect = clip.w / clip.h
+        target_aspect = vertical_width / vertical_height
+        
+        if input_aspect > target_aspect:
+            # Image is wider than target, fit by width
+            new_width = vertical_width
+            new_height = int(vertical_width / input_aspect)
+        else:
+            # Image is taller than target, fit by height  
+            new_height = vertical_height
+            new_width = int(vertical_height * input_aspect)
+        
+        # Resize while preserving aspect ratio
+        clip = clip.resized(new_size=(new_width, new_height))
+        
+        # Create black background and composite the resized clip centered
+        black_bg = ColorClip(size=(vertical_width, vertical_height), 
+                            color=(0,0,0), duration=clip.duration)
+        
+        # Center the resized clip on the black background
+        clip = clip.with_position('center')
+        clip = CompositeVideoClip([black_bg, clip])
+        
+        return clip
+
+    def manual_cut_correction(self, cut_frames, corrected_frames=None):
+        """
+        Allow manual correction of detected cut frames for edge cases.
+        Args:
+            cut_frames (list): Original detected cut frames
+            corrected_frames (list): Manually corrected cut frames (if None, will prompt user)
+        Returns:
+            list: Corrected cut frames
+        """
+        print(f"\nDetected cut frames: {cut_frames}")
+        
+        if corrected_frames is None:
+            print("\nManual cut frame correction:")
+            print("Enter corrected frame numbers separated by commas, or press Enter to use detected frames")
+            print("Example: 0, 45, 120, 180, 240")
+            
+            try:
+                user_input = input("Corrected frames: ").strip()
+                if user_input:
+                    corrected_frames = [int(x.strip()) for x in user_input.split(',')]
+                    corrected_frames = sorted(list(set(corrected_frames)))
+                else:
+                    corrected_frames = cut_frames
+            except (ValueError, KeyboardInterrupt):
+                print("Invalid input or interrupted, using detected frames")
+                corrected_frames = cut_frames
+        
+        print(f"Using cut frames: {corrected_frames}")
+        return corrected_frames
+
+    def export_cut_frames(self, cut_frames, output_file=None):
+        """
+        Export detected cut frames to a file for manual review.
+        Args:
+            cut_frames (list): List of cut frame numbers
+            output_file (str): Output file path (if None, uses default name)
+        Returns:
+            str: Path to the exported file
+        """
+        import json
+        import os
+        
+        if output_file is None:
+            base_name = os.path.splitext(os.path.basename(self.video_path))[0]
+            output_file = f"{base_name}_cut_frames.json"
+        
+        # Get video properties for context
+        fps = self._get_fps()
+        total_frames = self._get_total_frames()
+        duration = total_frames / fps
+        
+        # Create export data
+        export_data = {
+            'video_path': self.video_path,
+            'total_frames': total_frames,
+            'fps': fps,
+            'duration_seconds': duration,
+            'cut_frames': cut_frames,
+            'cut_times': [frame / fps for frame in cut_frames],
+            'cut_times_formatted': [self._seconds_to_time(frame / fps) for frame in cut_frames]
+        }
+        
+        # Write to file
+        with open(output_file, 'w') as f:
+            json.dump(export_data, f, indent=2)
+        
+        print(f"Cut frames exported to: {output_file}")
+        print(f"Total cuts: {len(cut_frames)}")
+        print(f"Cut times: {export_data['cut_times_formatted']}")
+        
+        return output_file
+
 def main():
     """
     Command-line interface for the MoistCritikalVideoProcessor.
@@ -805,8 +1351,17 @@ Examples:
   # Basic video processing with default settings
   python edit.py input_video.mp4 output_video.mp4
 
+  # Frame-perfect crop transitions (recommended)
+  python edit.py input.mp4 output.mp4 --frame-perfect
+
+  # Frame-perfect with manual cut correction
+  python edit.py input.mp4 output.mp4 --frame-perfect --manual-cuts
+
+  # Frame-perfect with specific cut frames
+  python edit.py input.mp4 output.mp4 --frame-perfect --cut-frames "0,45,120,180,240"
+
   # Process with high quality for Instagram
-  python edit.py input.mp4 output.mp4 --quality high --platform instagram
+  python edit.py input.mp4 output.mp4 --quality high --platform instagram --frame-perfect
 
   # Custom bitrate processing
   python edit.py input.mp4 output.mp4 --quality custom --bitrate 8000
@@ -820,8 +1375,11 @@ Examples:
   # Motion analysis
   python edit.py input.mp4 --analyze-motion
 
-  # Full pipeline with progress callback
-  python edit.py input.mp4 output.mp4 --full-pipeline --progress
+  # Full pipeline with frame-perfect processing
+  python edit.py input.mp4 output.mp4 --full-pipeline --frame-perfect --progress
+
+  # Legacy segment-based processing (old method)
+  python edit.py input.mp4 output.mp4 --legacy-mode
         """
     )
     
@@ -923,6 +1481,30 @@ Examples:
     )
     
     parser.add_argument(
+        '--frame-perfect',
+        action='store_true',
+        help='Use frame-perfect crop transitions (detect hard cuts and apply crops per subclip)'
+    )
+    
+    parser.add_argument(
+        '--legacy-mode',
+        action='store_true',
+        help='Use legacy segment-based processing instead of frame-perfect cuts'
+    )
+    
+    parser.add_argument(
+        '--manual-cuts',
+        action='store_true',
+        help='Allow manual correction of detected cut frames'
+    )
+    
+    parser.add_argument(
+        '--cut-frames',
+        type=str,
+        help='Comma-separated list of manual cut frame numbers (e.g., "0,45,120,180")'
+    )
+    
+    parser.add_argument(
         '--finalize-only',
         action='store_true',
         help='Only run video finalization (encoding optimization)'
@@ -947,6 +1529,12 @@ Examples:
         help='Enable verbose output'
     )
     
+    parser.add_argument(
+        '--export-cuts',
+        action='store_true',
+        help='Export detected cut frames to JSON file for manual review'
+    )
+    
     # Parse arguments
     args = parser.parse_args()
     
@@ -964,7 +1552,7 @@ Examples:
     
     if not args.output_video and not any([
         args.detect_scenes, args.detect_faces, args.detect_static,
-        args.classify_segments, args.analyze_motion, args.get_info
+        args.classify_segments, args.analyze_motion, args.get_info, args.export_cuts
     ]):
         print("Error: Output video path is required unless running analysis-only modes")
         sys.exit(1)
@@ -995,6 +1583,12 @@ Examples:
         )
         
         # Run requested operations
+        if args.export_cuts:
+            print("\n=== Exporting Cut Frames ===")
+            cut_frames = processor.detect_hard_cuts()
+            export_file = processor.export_cut_frames(cut_frames)
+            print(f"✅ Cut frames exported to: {export_file}")
+        
         if args.get_info:
             print("\n=== Video Information ===")
             info = processor.get_video_info(args.input_video)
@@ -1063,29 +1657,54 @@ Examples:
         if args.full_pipeline:
             print("\n=== Running Full Pipeline ===")
             
-            # Step 1: Scene detection
-            print("Step 1: Detecting scenes...")
-            processor.detect_scene_changes()
-            
-            # Step 2: Face detection
-            print("Step 2: Detecting faces...")
-            processor.face_locations = processor.detect_faces_in_video()
-            
-            # Step 3: Static frame detection
-            print("Step 3: Detecting static frames...")
-            processor.static_segments = processor.detect_static_frames()
-            
-            # Step 4: Segment classification
-            print("Step 4: Classifying segments...")
-            segments = processor.classify_video_segments()
-            
-            # Step 5: Determine crop strategies
-            print("Step 5: Determining crop strategies...")
-            crop_strategies = processor.determine_crop_strategy(segments)
-            
-            # Step 6: Process to vertical format
-            print("Step 6: Processing to vertical format...")
-            processed_path = processor.process_to_vertical_format(crop_strategies)
+            if args.frame_perfect:
+                # Frame-perfect approach
+                print("Using frame-perfect crop transitions...")
+                
+                # Step 1: Detect hard cuts
+                print("Step 1: Detecting hard cuts...")
+                cut_frames = processor.detect_hard_cuts()
+                
+                # Step 2: Manual correction if requested
+                if args.manual_cuts or args.cut_frames:
+                    if args.cut_frames:
+                        corrected_frames = [int(x.strip()) for x in args.cut_frames.split(',')]
+                        corrected_frames = sorted(list(set(corrected_frames)))
+                    else:
+                        corrected_frames = None
+                    cut_frames = processor.manual_cut_correction(cut_frames, corrected_frames)
+                
+                # Step 3: Process to vertical format with frame-perfect approach
+                print("Step 2: Processing to vertical format...")
+                processed_path = processor.process_to_vertical_format(use_frame_perfect=True, cut_frames=cut_frames)
+                
+            else:
+                # Legacy approach
+                print("Using legacy segment-based processing...")
+                
+                # Step 1: Scene detection
+                print("Step 1: Detecting scenes...")
+                processor.detect_scene_changes()
+                
+                # Step 2: Face detection
+                print("Step 2: Detecting faces...")
+                processor.face_locations = processor.detect_faces_in_video()
+                
+                # Step 3: Static frame detection
+                print("Step 3: Detecting static frames...")
+                processor.static_segments = processor.detect_static_frames()
+                
+                # Step 4: Segment classification
+                print("Step 4: Classifying segments...")
+                segments = processor.classify_video_segments()
+                
+                # Step 5: Determine crop strategies
+                print("Step 5: Determining crop strategies...")
+                crop_strategies = processor.determine_crop_strategy(segments)
+                
+                # Step 6: Process to vertical format
+                print("Step 6: Processing to vertical format...")
+                processed_path = processor.process_to_vertical_format(crop_strategies, use_frame_perfect=False)
             
             # Step 7: Finalize video
             print("Step 7: Finalizing video...")
@@ -1114,12 +1733,16 @@ Examples:
         elif args.vertical_format:
             print("\n=== Vertical Format Processing ===")
             
-            # Run classification and cropping
-            segments = processor.classify_video_segments()
-            crop_strategies = processor.determine_crop_strategy(segments)
-            
-            # Process to vertical format
-            processed_path = processor.process_to_vertical_format(crop_strategies)
+            if args.frame_perfect:
+                # Frame-perfect approach
+                print("Using frame-perfect crop transitions...")
+                processed_path = processor.process_to_vertical_format(use_frame_perfect=True)
+            else:
+                # Legacy approach
+                print("Using legacy segment-based processing...")
+                segments = processor.classify_video_segments()
+                crop_strategies = processor.determine_crop_strategy(segments)
+                processed_path = processor.process_to_vertical_format(crop_strategies, use_frame_perfect=False)
             
             if processed_path:
                 print(f"✅ Vertical format processing completed: {processed_path}")
