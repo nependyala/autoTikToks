@@ -6,7 +6,7 @@ import face_recognition
 import scenedetect
 from scenedetect import detect, ContentDetector
 import numpy as np
-from moviepy import VideoFileClip, concatenate_videoclips, ColorClip, CompositeVideoClip
+from moviepy import VideoFileClip, concatenate_videoclips, ColorClip, CompositeVideoClip, VideoClip
 import os
 import sys
 from skimage.metrics import structural_similarity as ssim
@@ -630,52 +630,42 @@ class MoistCritikalVideoProcessor:
             seg_clip = seg_clip.cropped(x1=x1, y1=y1, x2=x2, y2=y2)
             
         elif crop['strategy'] == 'center_crop':
-            # For freeze frames: preserve aspect ratio and add black bars
-            # Calculate scaling to fit within 9:16 while preserving aspect ratio
-            input_aspect = seg_clip.w / seg_clip.h
-            target_aspect = vertical_width / vertical_height
+            # Center crop for freeze frames and other content
+            subclip = self._apply_center_crop(seg_clip, vertical_width, vertical_height)
             
-            if input_aspect > target_aspect:
-                # Image is wider than target, fit by width
-                new_width = vertical_width
-                new_height = int(vertical_width / input_aspect)
-            else:
-                # Image is taller than target, fit by height  
-                new_height = vertical_height
-                new_width = int(vertical_height * input_aspect)
-            
-            # Resize while preserving aspect ratio
-            seg_clip = seg_clip.resized(new_size=(new_width, new_height))
-            
-            # Create black background and composite the resized clip centered
-            from moviepy import ColorClip
-            black_bg = ColorClip(size=(vertical_width, vertical_height), 
-                                color=(0,0,0), duration=seg_clip.duration)
-            
-            # Center the resized clip on the black background
-            seg_clip = seg_clip.with_position('center')
-            seg_clip = CompositeVideoClip([black_bg, seg_clip])
+        elif crop['strategy'] == 'smart_crop':
+            # Smart crop for video clips - analyze content focus
+            # For now, use center crop as fallback
+            subclip = self._apply_center_crop(seg_clip, vertical_width, vertical_height)
             
         else:
-            # For other types (transitions, etc.): simple center crop
-            aspect_ratio = vertical_width / vertical_height
-            if seg_clip.w / seg_clip.h > aspect_ratio:
-                crop_height = seg_clip.h
-                crop_width = int(crop_height * aspect_ratio)
-            else:
-                crop_width = seg_clip.w
-                crop_height = int(crop_width / aspect_ratio)
-            
-            x1 = (seg_clip.w - crop_width) // 2
-            y1 = (seg_clip.h - crop_height) // 2
-            x2 = x1 + crop_width
-            y2 = y1 + crop_height
-            
-            seg_clip = seg_clip.cropped(x1=x1, y1=y1, x2=x2, y2=y2)
+            # Default to center crop
+            subclip = self._apply_center_crop(seg_clip, vertical_width, vertical_height)
         
-        # Final resize to exact output dimensions
-        seg_clip = seg_clip.resized(new_size=(vertical_width, vertical_height))
-        return seg_clip
+        # No final resize - cropping and padding already deliver exact dimensions
+        return subclip
+    
+    def _apply_center_crop(self, clip, vertical_width, vertical_height):
+        """
+        Apply center crop with pure 9:16 crop window using full original height.
+        """
+        # Original frame dimensions
+        h, w = clip.h, clip.w
+
+        # Compute horizontal crop width to match 9:16 using original height
+        crop_w = int(h * 9 / 16)  # 9:16 aspect, using original height
+
+        # Compute centered x-offset
+        x1 = max(0, (w - crop_w) // 2)
+        x2 = x1 + crop_w
+
+        # Crop horizontally only, preserve full height
+        cropped = clip.cropped(x1=x1, y1=0, x2=x2, y2=h)
+        
+        # Add resize to ensure the crop fills the output
+        cropped = cropped.resized(new_size=(vertical_width, vertical_height))
+        
+        return cropped
 
     def _apply_dynamic_crop_switching(self, seg_clip, start_frame, end_frame, static_frames, face_frames, crop, vertical_width, vertical_height, fps):
         """Apply dynamic crop switching based on frame content."""
@@ -1220,7 +1210,7 @@ class MoistCritikalVideoProcessor:
             VideoFileClip: Processed subclip
         """
         if crop_strategy == 'face_crop':
-            # Dynamic face-centered crop for talking head segments
+            # Dynamic face crop: crop to 9:16 window, follow face, NO black bars
             if content_type == 'talking_head' and hasattr(self, 'dynamic_face_crop_enabled') and self.dynamic_face_crop_enabled:
                 # Use dynamic face cropping for smooth pan transitions
                 sample_interval = getattr(self, 'face_sample_interval', 30)
@@ -1264,13 +1254,19 @@ class MoistCritikalVideoProcessor:
                         y2 = subclip.h
                     
                     subclip = subclip.cropped(x1=x1, y1=y1, x2=x2, y2=y2)
+                    # Add resize to ensure the crop fills the output
+                    subclip = subclip.resized(new_size=(vertical_width, vertical_height))
                 else:
                     # No face detected, use center crop
                     subclip = self._apply_center_crop(subclip, vertical_width, vertical_height)
                 
         elif crop_strategy == 'center_crop':
-            # Center crop for freeze frames and other content
-            subclip = self._apply_center_crop(subclip, vertical_width, vertical_height)
+            # Freeze frame: show full frame, add black bars above/below to fit 9:16
+            if content_type == 'freeze_frame':
+                return self._apply_freeze_frame_full_frame(subclip, vertical_width, vertical_height)
+            else:
+                # For other content types, use center crop
+                subclip = self._apply_center_crop(subclip, vertical_width, vertical_height)
             
         elif crop_strategy == 'smart_crop':
             # Smart crop for video clips - analyze content focus
@@ -1281,40 +1277,9 @@ class MoistCritikalVideoProcessor:
             # Default to center crop
             subclip = self._apply_center_crop(subclip, vertical_width, vertical_height)
         
-        # Final resize to exact output dimensions
-        subclip = subclip.resized(new_size=(vertical_width, vertical_height))
+        # No final resize - cropping and padding already deliver exact dimensions
         return subclip
     
-    def _apply_center_crop(self, clip, vertical_width, vertical_height):
-        """
-        Apply center crop with aspect ratio preservation and black bars for freeze frames.
-        """
-        # Calculate scaling to fit within 9:16 while preserving aspect ratio
-        input_aspect = clip.w / clip.h
-        target_aspect = vertical_width / vertical_height
-        
-        if input_aspect > target_aspect:
-            # Image is wider than target, fit by width
-            new_width = vertical_width
-            new_height = int(vertical_width / input_aspect)
-        else:
-            # Image is taller than target, fit by height  
-            new_height = vertical_height
-            new_width = int(vertical_height * input_aspect)
-        
-        # Resize while preserving aspect ratio
-        clip = clip.resized(new_size=(new_width, new_height))
-        
-        # Create black background and composite the resized clip centered
-        black_bg = ColorClip(size=(vertical_width, vertical_height), 
-                            color=(0,0,0), duration=clip.duration)
-        
-        # Center the resized clip on the black background
-        clip = clip.with_position('center')
-        clip = CompositeVideoClip([black_bg, clip])
-        
-        return clip
-
     def manual_cut_correction(self, cut_frames, corrected_frames=None):
         """
         Allow manual correction of detected cut frames for edge cases.
@@ -1482,31 +1447,35 @@ class MoistCritikalVideoProcessor:
 
     def dynamic_face_crop(self, clip, Xfunc, Yfunc, target_w, target_h):
         """
-        Apply dynamic face-centered cropping to keep face centered smoothly.
+        Apply dynamic face-centered cropping to create a pure 9:16 crop window.
         Args:
             clip: VideoFileClip to process
             Xfunc: X-coordinate interpolator function
-            Yfunc: Y-coordinate interpolator function
-            target_w (int): Target crop width
-            target_h (int): Target crop height
+            Yfunc: Y-coordinate interpolator function (not used in width-only crop)
+            target_w (int): Target crop width (9 in 9:16 ratio)
+            target_h (int): Target crop height (16 in 9:16 ratio)
         Returns:
             VideoFileClip: Dynamically cropped clip
         """
         import numpy as np
-        
-        def fl(gf, t):
-            frame = gf(t)  # RGB ndarray H×W×3
-            h, w = frame.shape[:2]
-            cx, cy = Xfunc(t), Yfunc(t)
-            
-            # Compute top-left corner for target crop
-            x1 = int(np.clip(cx - target_w/2, 0, w - target_w))
-            y1 = int(np.clip(cy - target_h/2, 0, h - target_h))
-            
-            # Extract crop
-            return frame[y1:y1+target_h, x1:x1+target_w]
-        
-        return clip.fl(fl, apply_to=["mask"])
+        from moviepy import VideoClip
+
+        h, w = clip.size[1], clip.size[0]
+        crop_w = int(h * 9 / 16)  # 9:16 aspect, using original height
+
+        def frame_function(t):
+            frame = clip.get_frame(t)
+            cx = Xfunc(t)
+            # Center crop horizontally, clamp to frame
+            x1 = int(np.clip(cx - crop_w // 2, 0, w - crop_w))
+            return frame[:, x1:x1+crop_w, :]
+
+        new_clip = VideoClip().with_updated_frame_function(frame_function)
+        new_clip = new_clip.with_duration(clip.duration)
+        new_clip.size = (crop_w, h)
+        # Add resize to ensure the crop fills the output
+        new_clip = new_clip.resized(new_size=(target_w, target_h))
+        return new_clip
 
     def apply_dynamic_face_cropping(self, subclip, target_width, target_height, sample_interval=30):
         """
@@ -1530,7 +1499,7 @@ class MoistCritikalVideoProcessor:
         temp_path = os.path.join(temp_dir, temp_filename)
         
         # Write subclip to temp file
-        subclip.write_videofile(temp_path, fps=30, codec='libx264', audio=False, verbose=False, logger=None)
+        subclip.write_videofile(temp_path, fps=30, codec='libx264', audio=False, logger=None)
         
         try:
             # Detect face centers
@@ -1553,6 +1522,29 @@ class MoistCritikalVideoProcessor:
             # Clean up temp file
             if os.path.exists(temp_path):
                 os.remove(temp_path)
+
+    def _apply_freeze_frame_full_frame(self, clip, output_width, output_height):
+        """
+        Apply freeze frame cropping: show full frame with black bars above/below to fit 9:16.
+        """
+        # Scale original so width matches output width
+        scale = output_width / clip.w
+        new_height = int(clip.h * scale)
+        resized = clip.resized(width=output_width)
+        pad_top = (output_height - new_height) // 2
+        pad_bottom = output_height - new_height - pad_top
+        
+        from moviepy import ColorClip, CompositeVideoClip
+        black_top = ColorClip((output_width, pad_top), color=(0,0,0), duration=clip.duration)
+        black_bottom = ColorClip((output_width, pad_bottom), color=(0,0,0), duration=clip.duration)
+        
+        final = CompositeVideoClip([
+            black_top.with_position(("center", "top")),
+            resized.with_position(("center", pad_top)),
+            black_bottom.with_position(("center", pad_top + new_height))
+        ], size=(output_width, output_height))
+        
+        return final
 
 def main():
     """
