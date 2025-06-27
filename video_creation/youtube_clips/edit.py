@@ -29,6 +29,11 @@ class MoistCritikalVideoProcessor:
         self.face_locations = []     # To store detected face locations
         self.scene_boundaries = []   # To store scene boundaries (start, end timestamps)
         self.static_segments = []    # To store detected static/freeze frame segments
+        
+        # Optimal face tracking configuration
+        self.face_sample_interval = 10  # Check every 10 frames for smoother tracking
+        self.smoothing_window = 5       # Increased smoothing for frequent updates
+        self.dynamic_face_crop_enabled = True  # Enable dynamic face cropping by default
 
     def detect_scene_changes(self):
         """
@@ -1213,8 +1218,9 @@ class MoistCritikalVideoProcessor:
             # Dynamic face crop: crop to 9:16 window, follow face, NO black bars
             if content_type == 'talking_head' and hasattr(self, 'dynamic_face_crop_enabled') and self.dynamic_face_crop_enabled:
                 # Use dynamic face cropping for smooth pan transitions
-                sample_interval = getattr(self, 'face_sample_interval', 30)
-                return self.apply_dynamic_face_cropping(subclip, vertical_width, vertical_height, sample_interval)
+                sample_interval = getattr(self, 'face_sample_interval', 10)
+                max_speed = getattr(self, 'max_pan_speed', 300)
+                return self.apply_dynamic_face_cropping(subclip, vertical_width, vertical_height, sample_interval, max_speed)
             else:
                 # Fallback to static face crop for other content types or when disabled
                 sample_frame = subclip.get_frame(subclip.duration / 2)
@@ -1352,13 +1358,12 @@ class MoistCritikalVideoProcessor:
         
         return output_file
 
-    def detect_face_centers(self, video_path, sample_interval=30):
+    def detect_face_centers(self, video_path, sample_interval=10):
         """
-        Detect face centers at sparse intervals for smooth pan transitions.
-        Returns lists of times and face-center coordinates detected every `sample_interval` frames.
+        Detect face centers at frequent intervals for smooth tracking.
         Args:
             video_path (str): Path to the video file
-            sample_interval (int): Number of frames to skip between samples
+            sample_interval (int): Frame sampling interval (default: 10 for smoother tracking)
         Returns:
             tuple: (times, xs, ys) arrays of detected face centers
         """
@@ -1378,19 +1383,26 @@ class MoistCritikalVideoProcessor:
         centers = []
         frame_idx = 0
         
+        # Ensure we always sample first and last frames
+        critical_frames = {0, total_frames - 1}
+        
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
-            if frame_idx % sample_interval == 0:
+                
+            should_sample = (frame_idx % sample_interval == 0) or (frame_idx in critical_frames)
+            
+            if should_sample:
                 rgb = frame[:, :, ::-1]  # BGR→RGB
                 faces = face_recognition.face_locations(rgb, model="hog")
                 if faces:
                     # Pick the largest face
                     top, right, bottom, left = max(faces, key=lambda b: (b[2]-b[0])*(b[1]-b[3]))
-                    cx = (left + right) / 2
-                    cy = (top + bottom) / 2
-                    centers.append((frame_idx / fps, cx, cy))
+                    cx = (left + right) / 2.0  # Ensure float
+                    cy = (top + bottom) / 2.0  # Ensure float
+                    time_stamp = frame_idx / fps  # Ensure float
+                    centers.append((time_stamp, cx, cy))
                 
                 # Show progress
                 progress = (frame_idx / total_frames) * 100
@@ -1404,29 +1416,35 @@ class MoistCritikalVideoProcessor:
             print("Warning: No faces detected; cannot track.")
             return None, None, None
         
+        # Ensure we return numpy arrays of scalars
         times, xs, ys = zip(*centers)
-        print(f"Detected {len(centers)} face centers")
-        return np.array(times), np.array(xs), np.array(ys)
+        return np.array(times, dtype=float), np.array(xs, dtype=float), np.array(ys, dtype=float)
 
-    def make_smooth_interpolators(self, times, xs, ys, kind="linear", smoothing_window=3):
+    def make_smooth_interpolators(self, times, xs, ys, kind="cubic", smoothing_window=5, frame_w=None):
         """
-        Create smooth interpolators for face center trajectories.
+        Create smooth interpolators for face center trajectories using cubic interpolation.
         Args:
             times (np.array): Time points
             xs (np.array): X coordinates
             ys (np.array): Y coordinates
-            kind (str): Interpolation kind ('linear', 'cubic', etc.)
+            kind (str): Interpolation kind ('cubic', 'quadratic', 'linear')
             smoothing_window (int): Window size for smoothing
+            frame_w (int): Frame width for center initialization
         Returns:
             tuple: (Xfunc, Yfunc) interpolator functions
         """
         import numpy as np
         from scipy.interpolate import interp1d
         
+        # Ensure arrays are properly flattened and converted to scalars
+        times = np.asarray(times).flatten()
+        xs = np.asarray(xs).flatten()
+        ys = np.asarray(ys).flatten()
+        
         if len(times) < 2:
             # If only one point, create constant functions
             def constant_func(t):
-                return np.full_like(t, xs[0] if len(xs) > 0 else 0)
+                return np.full_like(t, float(xs[0]) if len(xs) > 0 else 0)
             return constant_func, constant_func
         
         # Apply sliding-window mean to smooth the trajectory
@@ -1437,54 +1455,130 @@ class MoistCritikalVideoProcessor:
             xs_smooth = xs
             ys_smooth = ys
         
-        # Create interpolator functions
+        # Create smooth interpolator functions with cubic interpolation
+        # FIX: Use first detected position instead of frame center for fill_value
+        first_x = float(xs_smooth[0]) if len(xs_smooth) > 0 else (frame_w / 2.0 if frame_w else 0)
+        last_x = float(xs_smooth[-1]) if len(xs_smooth) > 0 else first_x
+        
         Xfunc = interp1d(times, xs_smooth, kind=kind,
-                         fill_value=(xs_smooth[0], xs_smooth[-1]), bounds_error=False)
+                         fill_value=(first_x, last_x), bounds_error=False)
         Yfunc = interp1d(times, ys_smooth, kind=kind,
-                         fill_value=(ys_smooth[0], ys_smooth[-1]), bounds_error=False)
+                         fill_value=(float(ys_smooth[0]), float(ys_smooth[-1])), bounds_error=False)
         
         return Xfunc, Yfunc
 
-    def dynamic_face_crop(self, clip, Xfunc, Yfunc, target_w, target_h):
+    def capped_interpolator(self, Xfunc, times, max_speed=300):
         """
-        Apply dynamic face-centered cropping to create a pure 9:16 crop window.
+        Create a speed-capped interpolator to avoid sudden large jumps.
+        Args:
+            Xfunc: Original interpolator function
+            times: Time array for the clip
+            max_speed: Maximum pan speed in pixels per second
+        Returns:
+            function: Speed-capped interpolator function
+        """
+        import numpy as np
+        
+        # Precompute the full trajectory with speed capping
+        xs = Xfunc(times)
+        
+        # Compute frame-to-frame deltas
+        dt = np.diff(times, prepend=times[0])
+        dx = np.diff(xs, prepend=xs[0])
+        
+        # Calculate maximum allowed movement per frame
+        max_dx = max_speed * dt
+        
+        # Clamp each dx to respect maximum speed
+        dx_clamped = np.sign(dx) * np.minimum(np.abs(dx), max_dx)
+        
+        # Reconstruct a new, smoothed trajectory
+        xs_smooth = np.cumsum(dx_clamped)
+        xs_smooth += xs[0] - xs_smooth[0]  # Preserve starting position
+        
+        # CRITICAL FIX: Preserve the original trajectory mean to prevent drift
+        original_mean = np.mean(xs)
+        current_mean = np.mean(xs_smooth)
+        xs_smooth += (original_mean - current_mean)  # Correct for systematic drift
+        
+        # Create a new interpolator from the capped trajectory
+        from scipy.interpolate import interp1d
+        capped_Xfunc = interp1d(times, xs_smooth, kind='linear',
+                               fill_value=(float(xs_smooth[0]), float(xs_smooth[-1])), 
+                               bounds_error=False)
+        
+        return capped_Xfunc
+
+    def dynamic_face_crop(self, clip, Xfunc, Yfunc, target_w, target_h, max_speed=300):
+        """
+        Apply dynamic face-centered cropping with smooth continuous interpolation.
         Args:
             clip: VideoFileClip to process
             Xfunc: X-coordinate interpolator function
             Yfunc: Y-coordinate interpolator function (not used in width-only crop)
             target_w (int): Target crop width (9 in 9:16 ratio)
             target_h (int): Target crop height (16 in 9:16 ratio)
+            max_speed (int): Maximum pan speed in pixels per second
         Returns:
             VideoFileClip: Dynamically cropped clip
         """
         import numpy as np
         from moviepy import VideoClip
 
-        h, w = clip.size[1], clip.size[0]
-        crop_w = int(h * 9 / 16)  # 9:16 aspect, using original height
+        frame_w, frame_h = clip.size
+        # Use exact target aspect ratio to prevent sub-pixel positioning errors
+        target_aspect = target_w / target_h
+        crop_w = int(frame_h * target_aspect)
+
+        # Build speed-capped interpolator
+        fps = clip.fps
+        times = np.linspace(0, clip.duration, int(clip.duration * fps))
+        capped_Xfunc = self.capped_interpolator(Xfunc, times, max_speed)
 
         def frame_function(t):
+            cx = float(capped_Xfunc(t))
+            half = crop_w / 2.0
+
+            # 1) Ideal, unclamped origin
+            orig_x1 = int(cx - half)
+
+            # 2) Determine overlap with frame
+            content_x1 = max(0, orig_x1)
+            content_x2 = min(frame_w, orig_x1 + crop_w)
+            content_width = content_x2 - content_x1
+
+            # 3) Compute padding needed to restore full width
+            pad_left  = max(0, -orig_x1)
+            pad_right = max(0, (orig_x1 + crop_w) - frame_w)
+
+            # 4) Extract only the overlapping slice
             frame = clip.get_frame(t)
-            cx = Xfunc(t)
-            # Center crop horizontally, clamp to frame
-            x1 = int(np.clip(cx - crop_w // 2, 0, w - crop_w))
-            return frame[:, x1:x1+crop_w, :]
+            crop = frame[:, content_x1:content_x2, :]
+
+            # 5) Pad back to exactly crop_w
+            if pad_left or pad_right:
+                h, w, c = crop.shape
+                assert w == content_width
+                full = np.zeros((h, crop_w, c), dtype=crop.dtype)
+                full[:, pad_left:pad_left + w, :] = crop
+                crop = full
+
+            return crop
 
         new_clip = VideoClip().with_updated_frame_function(frame_function)
         new_clip = new_clip.with_duration(clip.duration)
-        new_clip.size = (crop_w, h)
-        # Add resize to ensure the crop fills the output
-        new_clip = new_clip.resized(new_size=(target_w, target_h))
-        return new_clip
+        new_clip.size = (crop_w, frame_h)
+        return new_clip.resized(new_size=(target_w, target_h))
 
-    def apply_dynamic_face_cropping(self, subclip, target_width, target_height, sample_interval=30):
+    def apply_dynamic_face_cropping(self, subclip, target_width, target_height, sample_interval=10, max_speed=300):
         """
         Apply dynamic face-centered cropping to a subclip for smooth pan transitions.
         Args:
             subclip: VideoFileClip subclip to process
             target_width (int): Target crop width
             target_height (int): Target crop height
-            sample_interval (int): Frame sampling interval for face detection
+            sample_interval (int): Frame sampling interval for face detection (default: 10 for smoother tracking)
+            max_speed (int): Maximum pan speed in pixels per second (default: 300)
         Returns:
             VideoFileClip: Dynamically cropped subclip
         """
@@ -1509,13 +1603,13 @@ class MoistCritikalVideoProcessor:
                 print("No faces detected, using center crop fallback")
                 return self._apply_center_crop(subclip, target_width, target_height)
             
-            # Create smooth interpolators
-            Xfunc, Yfunc = self.make_smooth_interpolators(times, xs, ys, kind="linear", smoothing_window=3)
+            # Create smooth interpolators with cubic interpolation
+            Xfunc, Yfunc = self.make_smooth_interpolators(times, xs, ys, kind="cubic", smoothing_window=5, frame_w=subclip.w)
             
-            # Apply dynamic cropping
-            cropped_clip = self.dynamic_face_crop(subclip, Xfunc, Yfunc, target_width, target_height)
+            # Apply dynamic cropping with smooth continuous interpolation
+            cropped_clip = self.dynamic_face_crop(subclip, Xfunc, Yfunc, target_width, target_height, max_speed)
             
-            print("Dynamic face cropping applied successfully")
+            print("Dynamic face cropping applied successfully with smooth interpolation")
             return cropped_clip
             
         finally:
@@ -1546,6 +1640,67 @@ class MoistCritikalVideoProcessor:
         
         return final
 
+    def build_face_trajectory(self, times, xs, total_duration, fps, frame_width):
+        """
+        Build a per-frame array of crop positions that holds the last known face position.
+        Args:
+            times: list of detection times
+            xs: list of x positions (face centers)
+            total_duration: clip duration in seconds
+            fps: frames per second
+            frame_width: width of the video frame
+        Returns:
+            list: crop_xs - per-frame crop center positions
+        """
+        # Ensure times and xs are numpy arrays and flatten if needed
+        import numpy as np
+        times = np.asarray(times).flatten()
+        xs = np.asarray(xs).flatten()
+        
+        # Apply low-pass filter to smooth face positions
+        if len(xs) > 0:
+            smoothed_xs = self.apply_low_pass_filter(xs, alpha=0.15)
+        else:
+            smoothed_xs = xs
+        
+        # Build a per-frame array of crop positions
+        num_frames = int(total_duration * fps)
+        crop_xs = []
+        last_x = frame_width // 2  # default to center
+
+        detection_idx = 0
+        for i in range(num_frames):
+            t = i / fps
+            # Fix: Use proper array indexing and scalar comparison
+            while (detection_idx < len(times) and 
+                   detection_idx < len(smoothed_xs) and
+                   float(times[detection_idx]) <= t):  # Convert to scalar
+                last_x = float(smoothed_xs[detection_idx])  # Convert to scalar
+                detection_idx += 1
+            crop_xs.append(last_x)
+        
+        return crop_xs
+
+    def apply_low_pass_filter(self, positions, alpha=0.15):
+        """
+        Apply low-pass filter to smooth face position data.
+        Args:
+            positions: list or np.array of x coordinates
+            alpha: smoothing factor (0-1, lower = smoother)
+        Returns:
+            list: smoothed positions
+        """
+        # Guard against empty or missing positions
+        if positions is None or len(positions) == 0:
+            return [] if positions is None else list(positions)
+        
+        smoothed = [positions[0]]  # First position unchanged
+        for i in range(1, len(positions)):
+            # Low-pass filter: filtered = alpha * raw + (1-alpha) * previous_filtered
+            smoothed_pos = alpha * positions[i] + (1 - alpha) * smoothed[i-1]
+            smoothed.append(smoothed_pos)
+        return smoothed
+
 def main():
     """
     Command-line interface for the MoistCritikalVideoProcessor.
@@ -1557,7 +1712,7 @@ def main():
     
     # Create argument parser
     parser = argparse.ArgumentParser(
-        description="Video processing tool with facial recognition, scene detection, and social media optimization",
+        description="Video processing tool with facial recognition, scene detection, and social media optimization. Features optimal face tracking with 10-frame sampling and 5-frame smoothing by default. DEFAULT: Runs optimal TikTok pipeline with frame-perfect processing and high quality output.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -1567,11 +1722,14 @@ Examples:
   # Frame-perfect crop transitions (recommended)
   python edit.py input.mp4 output.mp4 --frame-perfect
 
-  # Frame-perfect with dynamic face cropping (smooth pan transitions)
+  # Frame-perfect with dynamic face cropping (smooth pan transitions) - OPTIMAL CONFIGURATION
   python edit.py input.mp4 output.mp4 --frame-perfect --dynamic-face-crop
 
-  # Dynamic face cropping with custom settings
-  python edit.py input.mp4 output.mp4 --frame-perfect --dynamic-face-crop --face-sample-interval 15 --smoothing-window 5
+  # Dynamic face cropping with custom settings (for advanced users)
+  python edit.py input.mp4 output.mp4 --frame-perfect --dynamic-face-crop --face-sample-interval 5 --smoothing-window 7 --max-pan-speed 200
+
+  # Ultra-smooth face tracking (slower pan speed)
+  python edit.py input.mp4 output.mp4 --frame-perfect --dynamic-face-crop --max-pan-speed 150 --face-sample-interval 5
 
   # Frame-perfect with manual cut correction
   python edit.py input.mp4 output.mp4 --frame-perfect --manual-cuts
@@ -1766,21 +1924,28 @@ Examples:
     parser.add_argument(
         '--face-sample-interval',
         type=int,
-        default=30,
-        help='Frame sampling interval for dynamic face detection (default: 30)'
+        default=10,
+        help='Frame sampling interval for dynamic face detection (default: 10 for smoother tracking)'
     )
     
     parser.add_argument(
         '--smoothing-window',
         type=int,
-        default=3,
-        help='Smoothing window size for face trajectory (default: 3)'
+        default=5,
+        help='Smoothing window size for face trajectory (default: 5 for optimal smoothing)'
     )
     
     parser.add_argument(
         '--static-face-crop',
         action='store_true',
         help='Use static face cropping instead of dynamic (faster but less smooth)'
+    )
+    
+    parser.add_argument(
+        '--max-pan-speed',
+        type=int,
+        default=300,
+        help='Maximum pan speed in pixels per second for smooth face tracking (default: 300)'
     )
     
     # Parse arguments
@@ -1830,10 +1995,11 @@ Examples:
             scene_threshold=args.scene_threshold
         )
         
-        # Store dynamic face cropping options
+        # Store dynamic face cropping options (use optimal defaults unless overridden)
         processor.dynamic_face_crop_enabled = args.dynamic_face_crop or not args.static_face_crop
-        processor.face_sample_interval = args.face_sample_interval
-        processor.smoothing_window = args.smoothing_window
+        processor.face_sample_interval = args.face_sample_interval  # Default is now 10
+        processor.smoothing_window = args.smoothing_window  # Default is now 5
+        processor.max_pan_speed = args.max_pan_speed  # Default is now 300
         
         # Run requested operations
         if args.export_cuts:
@@ -2020,24 +2186,43 @@ Examples:
                 print("❌ Video finalization failed")
                 sys.exit(1)
         
-        # If no specific processing mode was selected, just run finalization
+        # If no specific processing mode was selected, run optimal TikTok pipeline by default
         elif not any([
             args.detect_scenes, args.detect_faces, args.detect_static,
             args.classify_segments, args.analyze_motion, args.get_info
         ]):
-            print("\n=== Basic Video Finalization ===")
+            print("\n=== Running Optimal TikTok Pipeline (Default) ===")
+            print("Using frame-perfect crop transitions with dynamic face cropping...")
+            
+            # Step 1: Detect hard cuts
+            print("Step 1: Detecting hard cuts...")
+            cut_frames = processor.detect_hard_cuts()
+            
+            # Step 2: Process to vertical format with frame-perfect approach
+            print("Step 2: Processing to vertical format...")
+            processed_path = processor.process_to_vertical_format(use_frame_perfect=True, cut_frames=cut_frames)
+            
+            # Step 3: Finalize video with high quality TikTok settings
+            print("Step 3: Finalizing video with high quality TikTok settings...")
             finalized_path = processor.finalize_video_output(
-                quality_preset=args.quality,
-                custom_bitrate=args.bitrate,
-                target_platform=args.platform,
-                add_metadata=not args.no_metadata,
+                input_video_path=processed_path,
+                quality_preset='high',
+                target_platform='tiktok',
+                add_metadata=True,
                 progress_callback=progress_callback
             )
             
             if finalized_path:
-                print(f"✅ Video processing completed: {finalized_path}")
+                print(f"\n✅ Optimal TikTok pipeline completed successfully!")
+                print(f"Final output: {finalized_path}")
+                
+                # Show final video info
+                final_info = processor.get_video_info(finalized_path)
+                if final_info:
+                    print(f"Final file size: {final_info['file_size_mb']:.1f} MB")
+                    print(f"Final resolution: {final_info['width']}x{final_info['height']}")
             else:
-                print("❌ Video processing failed")
+                print("❌ Optimal TikTok pipeline failed")
                 sys.exit(1)
         
         print("\n🎉 Processing completed successfully!")
