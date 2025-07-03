@@ -37,7 +37,7 @@ def main():
 
     # Step 1: Fetch transcript
     print("\n=== Step 1: Fetching transcript ===")
-    run_subprocess([sys.executable, 'transcript_fetch.py', youtube_url])
+    run_subprocess([sys.executable, 'transcript_fetch.py', youtube_url], cwd=os.path.dirname(__file__))
     transcript_path = os.path.join(TEMP_DIR, transcript_file)
     if not os.path.exists(transcript_path):
         print(f"Transcript file not found: {transcript_path}")
@@ -45,7 +45,7 @@ def main():
 
     # Step 2: Analyze transcript for viral moments
     print("\n=== Step 2: Analyzing transcript for viral moments ===")
-    run_subprocess([sys.executable, 'decide_clip.py', transcript_file])
+    run_subprocess([sys.executable, 'decide_clip.py', transcript_file], cwd=os.path.dirname(__file__))
     moments_path = os.path.join(TEMP_DIR, moments_file)
     if not os.path.exists(moments_path):
         print(f"Moments file not found: {moments_path}")
@@ -66,8 +66,36 @@ def main():
     print(f"\n--- Downloading first clip: {title} ---")
     run_subprocess([
         sys.executable, 'clip_fetch.py', youtube_url, start, end
-    ])
+    ], cwd=os.path.dirname(__file__))
     print("\nFirst viral clip downloaded!")
+
+    # Step 4: Edit the viral clip with maximum settings
+    print("\n=== Step 4: Editing viral clip with maximum settings ===")
+    print("Running edit.py with best quality, best frame detection, and facial movement check every 3 frames...")
+    
+    # Find the downloaded clip file
+    clip_files = [f for f in os.listdir(TEMP_DIR) if f.startswith('clip_') and f.endswith('.mp4')]
+    if not clip_files:
+        print("No clip files found in temporary directory")
+        sys.exit(1)
+    
+    # Use the most recent clip file (should be the one we just downloaded)
+    input_clip = os.path.join(TEMP_DIR, clip_files[-1])
+    output_clip = os.path.join(TEMP_DIR, f"edited_{clip_files[-1]}")
+    
+    print(f"Input clip: {input_clip}")
+    print(f"Output clip: {output_clip}")
+    
+    run_subprocess([
+        sys.executable, 'edit.py', 
+        input_clip, output_clip,
+        '--quality', 'high',
+        '--face-sample-interval', '3',
+        '--frame-perfect',
+        '--dynamic-face-crop',
+        '--progress'
+    ], cwd=os.path.dirname(__file__))
+    print("\nViral clip editing completed with maximum settings!")
 
 if __name__ == "__main__":
     main() 

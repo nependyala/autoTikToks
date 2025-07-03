@@ -1,0 +1,78 @@
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+Title: TikTok Line-by-Line Captions
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: TikTokLine,Arial Black,95,&H00FFFFFF,&H00FF6600,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,0,1,40,40,250,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.03,0:00:01.23,TikTokLine,,0,0,0,,{\k24}I {\k24}have {\k24}no {\k24}doubt {\k24}most
+Dialogue: 0,0:00:01.29,0:00:01.99,TikTokLine,,0,0,0,,{\k17}of {\k17}you {\k17}have {\k17}noticed
+Dialogue: 0,0:00:02.07,0:00:02.93,TikTokLine,,0,0,0,,{\k17}over {\k17}the {\k17}last {\k17}10 {\k17}or
+Dialogue: 0,0:00:02.95,0:00:03.85,TikTokLine,,0,0,0,,{\k22}11 {\k22}months {\k22}I've {\k22}been
+Dialogue: 0,0:00:03.90,0:00:04.64,TikTokLine,,0,0,0,,{\k24}a {\k24}lot {\k24}happier.
+Dialogue: 0,0:00:04.90,0:00:05.84,TikTokLine,,0,0,0,,{\k47}Glowing, {\k47}really.
+Dialogue: 0,0:00:05.96,0:00:07.00,TikTokLine,,0,0,0,,{\k34}Radiant. {\k34}You {\k34}can
+Dialogue: 0,0:00:07.06,0:00:07.80,TikTokLine,,0,0,0,,{\k24}tell {\k24}probably {\k24}just
+Dialogue: 0,0:00:07.84,0:00:08.91,TikTokLine,,0,0,0,,{\k26}from {\k26}my {\k26}voice {\k26}alone
+Dialogue: 0,0:00:08.97,0:00:09.85,TikTokLine,,0,0,0,,{\k29}and {\k29}this {\k29}striking
+Dialogue: 0,0:00:09.93,0:00:11.96,TikTokLine,,0,0,0,,{\k50}smile. {\k50}So {\k50}what {\k50}is
+Dialogue: 0,0:00:12.02,0:00:12.76,TikTokLine,,0,0,0,,{\k18}the {\k18}secret {\k18}to {\k18}this
+Dialogue: 0,0:00:12.80,0:00:14.02,TikTokLine,,0,0,0,,{\k61}newfound {\k61}happiness
+Dialogue: 0,0:00:14.08,0:00:15.02,TikTokLine,,0,0,0,,{\k23}of {\k23}mine? {\k23}The {\k23}one
+Dialogue: 0,0:00:15.10,0:00:16.15,TikTokLine,,0,0,0,,{\k34}trick {\k34}doctors {\k34}don't
+Dialogue: 0,0:00:16.21,0:00:17.56,TikTokLine,,0,0,0,,{\k27}want {\k27}you {\k27}to {\k27}know? {\k27}I
+Dialogue: 0,0:00:17.60,0:00:18.43,TikTokLine,,0,0,0,,{\k27}haven't {\k27}been {\k27}online
+Dialogue: 0,0:00:18.47,0:00:19.43,TikTokLine,,0,0,0,,{\k24}as {\k24}much. {\k24}I've {\k24}been
+Dialogue: 0,0:00:19.47,0:00:20.63,TikTokLine,,0,0,0,,{\k38}going {\k38}outside {\k38}far
+Dialogue: 0,0:00:20.69,0:00:21.43,TikTokLine,,0,0,0,,{\k37}more {\k37}frequently,
+Dialogue: 0,0:00:21.73,0:00:22.61,TikTokLine,,0,0,0,,{\k22}spending {\k22}time {\k22}in {\k22}the
+Dialogue: 0,0:00:22.67,0:00:24.10,TikTokLine,,0,0,0,,{\k35}real {\k35}world. {\k35}And {\k35}as
+Dialogue: 0,0:00:24.16,0:00:25.30,TikTokLine,,0,0,0,,{\k28}such, {\k28}I'm {\k28}sure {\k28}many
+Dialogue: 0,0:00:25.32,0:00:25.90,TikTokLine,,0,0,0,,{\k14}of {\k14}you {\k14}have {\k14}noticed
+Dialogue: 0,0:00:25.98,0:00:26.64,TikTokLine,,0,0,0,,{\k13}over {\k13}the {\k13}last {\k13}10 {\k13}or
+Dialogue: 0,0:00:26.66,0:00:28.18,TikTokLine,,0,0,0,,{\k50}11 {\k50}months, {\k50}internet
+Dialogue: 0,0:00:28.32,0:00:29.58,TikTokLine,,0,0,0,,{\k31}drama {\k31}hasn't {\k31}been {\k31}a
+Dialogue: 0,0:00:29.66,0:00:30.61,TikTokLine,,0,0,0,,{\k23}huge {\k23}focal {\k23}point {\k23}of
+Dialogue: 0,0:00:30.65,0:00:31.69,TikTokLine,,0,0,0,,{\k34}the {\k34}channel {\k34}because
+Dialogue: 0,0:00:31.71,0:00:32.75,TikTokLine,,0,0,0,,{\k26}I {\k26}haven't {\k26}seen {\k26}a
+Dialogue: 0,0:00:32.87,0:00:33.79,TikTokLine,,0,0,0,,{\k18}whole {\k18}bunch {\k18}of {\k18}it. {\k18}I
+Dialogue: 0,0:00:33.83,0:00:34.99,TikTokLine,,0,0,0,,{\k29}haven't {\k29}kept {\k29}up {\k29}with
+Dialogue: 0,0:00:35.11,0:00:36.34,TikTokLine,,0,0,0,,{\k30}the {\k30}vast {\k30}majority {\k30}of
+Dialogue: 0,0:00:36.43,0:00:37.70,TikTokLine,,0,0,0,,{\k31}it. {\k31}And, {\k31}of {\k31}course,
+Dialogue: 0,0:00:37.76,0:00:38.28,TikTokLine,,0,0,0,,{\k26}occasionally {\k26}I've
+Dialogue: 0,0:00:38.30,0:00:38.84,TikTokLine,,0,0,0,,{\k18}still {\k18}dipped {\k18}my
+Dialogue: 0,0:00:38.90,0:00:39.88,TikTokLine,,0,0,0,,{\k24}tootsies {\k24}in {\k24}some {\k24}of
+Dialogue: 0,0:00:39.98,0:00:40.78,TikTokLine,,0,0,0,,{\k20}it, {\k20}like, {\k20}if {\k20}there's
+Dialogue: 0,0:00:40.82,0:00:41.10,TikTokLine,,0,0,0,,{\k28}something
+Dialogue: 0,0:00:41.16,0:00:42.94,TikTokLine,,0,0,0,,{\k89}particularly {\k89}wacky
+Dialogue: 0,0:00:43.00,0:00:44.07,TikTokLine,,0,0,0,,{\k26}going {\k26}on. {\k26}And {\k26}I
+Dialogue: 0,0:00:44.10,0:00:44.81,TikTokLine,,0,0,0,,{\k23}still {\k23}cover, {\k23}like,
+Dialogue: 0,0:00:45.29,0:00:47.17,TikTokLine,,0,0,0,,{\k47}news {\k47}and {\k47}crazy {\k47}shit
+Dialogue: 0,0:00:47.21,0:00:48.21,TikTokLine,,0,0,0,,{\k25}going {\k25}on {\k25}with {\k25}aliens
+Dialogue: 0,0:00:48.29,0:00:49.03,TikTokLine,,0,0,0,,{\k14}and {\k14}all {\k14}of {\k14}that {\k14}kind
+Dialogue: 0,0:00:49.07,0:00:49.57,TikTokLine,,0,0,0,,{\k12}of {\k12}thing, {\k12}or {\k12}if
+Dialogue: 0,0:00:49.59,0:00:49.95,TikTokLine,,0,0,0,,{\k11}there's, {\k11}like, {\k11}a
+Dialogue: 0,0:00:50.01,0:00:51.59,TikTokLine,,0,0,0,,{\k52}really {\k52}cringe, {\k52}you
+Dialogue: 0,0:00:51.61,0:00:52.82,TikTokLine,,0,0,0,,{\k40}know, {\k40}prankster {\k40}that
+Dialogue: 0,0:00:52.86,0:00:53.50,TikTokLine,,0,0,0,,{\k21}got {\k21}arrested {\k21}or
+Dialogue: 0,0:00:53.54,0:00:53.96,TikTokLine,,0,0,0,,{\k21}something, {\k21}I'll
+Dialogue: 0,0:00:53.98,0:00:54.60,TikTokLine,,0,0,0,,{\k20}still {\k20}talk {\k20}about
+Dialogue: 0,0:00:54.64,0:00:56.22,TikTokLine,,0,0,0,,{\k39}that. {\k39}But {\k39}it's {\k39}not,
+Dialogue: 0,0:00:56.30,0:00:57.84,TikTokLine,,0,0,0,,{\k38}like, {\k38}a {\k38}fixation {\k38}for
+Dialogue: 0,0:00:57.88,0:00:58.74,TikTokLine,,0,0,0,,{\k17}me {\k17}like {\k17}it {\k17}used {\k17}to
+Dialogue: 0,0:00:58.78,0:00:59.64,TikTokLine,,0,0,0,,{\k17}be {\k17}over {\k17}the {\k17}last {\k17}few
+Dialogue: 0,0:00:59.68,0:01:00.25,TikTokLine,,0,0,0,,{\k14}years {\k14}where {\k14}I {\k14}was
+Dialogue: 0,0:01:00.28,0:01:01.43,TikTokLine,,0,0,0,,{\k38}covering {\k38}every {\k38}and-
+Dialogue: 0,0:01:02.05,0:01:03.43,TikTokLine,,0,0,0,,{\k34}any {\k34}and {\k34}all {\k34}internet
+Dialogue: 0,0:01:03.49,0:01:04.41,TikTokLine,,0,0,0,,{\k46}creator {\k46}space
+Dialogue: 0,0:01:05.13,0:01:06.95,TikTokLine,,0,0,0,,{\k45}hoopla. {\k45}And {\k45}I {\k45}want
+Dialogue: 0,0:01:06.97,0:01:07.58,TikTokLine,,0,0,0,,{\k12}to {\k12}keep {\k12}it {\k12}that {\k12}way.
+Dialogue: 0,0:01:07.76,0:01:08.25,TikTokLine,,0,0,0,,{\k12}I'm {\k12}having {\k12}a {\k12}lot
+Dialogue: 0,0:01:08.26,0:01:09.28,TikTokLine,,0,0,0,,{\k25}more {\k25}fun {\k25}not {\k25}doing
+Dialogue: 0,0:01:09.34,0:01:10.49,TikTokLine,,0,0,0,,{\k38}that. {\k38}That {\k38}being
+Dialogue: 0,0:01:10.53,0:01:11.54,TikTokLine,,0,0,0,,{\k25}said, {\k25}there {\k25}is {\k25}some

@@ -58,43 +58,60 @@ def analyze_transcript(transcript_content: str) -> List[Dict]:
     Returns:
         List[Dict]: List of identified moments with start and end timestamps
     """
-    prompt = """You are an assistant that analyzes video transcripts and extracts the funniest, most amusing, or shocking moments that could go viral online.
+    prompt = """You are an expert assistant that analyzes video transcripts to extract complete, self-contained moments that could go viral online.
 
 Input transcript format:
 Each segment has an index number, a start and end timestamp in "HH:MM:SS,mmm --> HH:MM:SS,mmm" format, followed by the spoken text.
 
+CRITICAL INSTRUCTION - COMPLETE THOUGHT BOUNDARIES:
+You MUST identify where one complete thought ends and a new thought begins. Look for these natural boundary markers:
+
+THOUGHT COMPLETION SIGNALS (good ending points):
+- Conclusive statements: "And I want to keep it that way", "That's why...", "So basically..."
+- Summary phrases: "The point is...", "What I'm saying is...", "In other words..."
+- Transition phrases before topic changes: "That being said...", "Now...", "Moving on..."
+- Natural pauses before new topics or examples
+- Rhetorical questions followed by answers that conclude the point
+
+AVOID CUTTING AT:
+- Mid-sentence or mid-clause
+- In the middle of explanations or examples
+- Before the speaker finishes their main point
+- During lists or enumerations that aren't complete
+
+PROCESS:
+1. Read through the entire transcript first
+2. Identify where Charlie introduces a topic or idea
+3. Follow that idea through its development and explanation
+4. Find where he naturally concludes that thought BEFORE moving to a new topic
+5. Extract from the introduction to the natural conclusion
+
 Your task:
-- Identify and extract segments or contiguous groups of segments that contain funny, outlandish, amusing, or shocking content.
-- Each extracted moment MUST be:
-  - At least 15 seconds long
-  - Never longer than 1 minute and 20 seconds (1:20)
-  - Ideally between 20-45 seconds for maximum impact
-- Return a JSON array of objects, each with:
-  - "start": the start timestamp of the moment (string, format HH:MM:SS,mmm)
-  - "end": the end timestamp of the moment (string, format HH:MM:SS,mmm)
-  - "title": a brief description of what Charlie is talking about in this moment (string, in second person, maximum 7 words)
+- Extract segments that represent ONE complete thought or narrative
+- Each clip should be 30 seconds to 1 minute 30 seconds
+- Prioritize funny, shocking, or engaging content
+- Ensure the ending feels natural and complete, not abrupt
 
-IMPORTANT: 
-- Your response must be a valid JSON array starting with [ and ending with ].
-- Do not include any other text.
-- Always refer to the speaker as "Charlie" in the title.
-- Write titles in second person (e.g., "Charlie talks about...", "Charlie explains...", "Charlie reacts to...")
-- Ensure each clip is at least 15 seconds and never exceeds 1:20 in length
-- Keep titles concise and never longer than 7 words
+Return a JSON array of objects with:
+- "start": start timestamp (HH:MM:SS,mmm)
+- "end": end timestamp (HH:MM:SS,mmm)
+- "title": what Charlie discusses (second person, max 7 words)
 
-Example response:
+EXAMPLE OF GOOD BOUNDARY DETECTION:
+If Charlie says: "I've been happier because I go outside more. And I want to keep it that way. That being said, there's something new..." 
+- END the clip at "keep it that way" (complete thought)
+- DON'T include "That being said..." (starts new thought)
+
+Your response must be valid JSON only, no other text.
+
 [
   {
-    "start": "00:00:00,160",
-    "end": "00:00:35,200",
-    "title": "Charlie explains Elon and Trump's falling out"
-  },
-  {
-    "start": "00:01:20,000",
-    "end": "00:01:55,000",
-    "title": "Charlie reacts to the debate's biggest moment"
+    "start": "00:00:00,080",
+    "end": "00:01:11,520",
+    "title": "Charlie explains his secret to happiness"
   }
-]"""
+]
+"""
 
     try:
         credentials = load_credentials()
