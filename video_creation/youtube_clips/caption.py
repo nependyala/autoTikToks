@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 TikTok-Style Line-by-Line Caption Display with WhisperX
-Displays complete lines that fit neatly at bottom, with instant transitions.
+Simplified font handling - install once, use always.
 """
 import argparse
 import subprocess
@@ -12,7 +12,57 @@ import sys
 import json
 import importlib.util
 import re
+import textwrap
 from pathlib import Path
+from PIL import ImageFont
+
+# Simple font path - install here once
+FONT_PATH = "/Library/Fonts/Arial_Black.ttf"
+
+def _text_pixel_width(text, font_path, pts):
+    """Return the pixel width of a text string in the given font + point size."""
+    font = ImageFont.truetype(font_path, pts)
+    return font.getlength(text)          # Pillow ≥9.2
+
+def setup_font():
+    """
+    Simple font setup: copy to /Library/Fonts/ if needed.
+    """
+    if os.path.exists(FONT_PATH):
+        print(f"✅ Font ready at: {FONT_PATH}")
+        return FONT_PATH
+    
+    # Try to copy from system location
+    source_font = "/System/Library/Fonts/Supplemental/Arial Black.ttf"
+    if os.path.exists(source_font):
+        try:
+            print(f"📦 Installing font to: {FONT_PATH}")
+            shutil.copy2(source_font, FONT_PATH)
+            print("✅ Font installed successfully")
+            return FONT_PATH
+        except Exception as e:
+            print(f"❌ Failed to install font: {e}")
+            print("Using system font instead")
+            return None
+    
+    print("⚠️  Arial Black not found, using system font")
+    return None
+
+def test_font_with_ffmpeg(font_path):
+    """
+    Test if a font works with FFmpeg by running a simple test command.
+    """
+    try:
+        test_cmd = [
+            'ffmpeg', '-f', 'lavfi', '-i', 'color=red:size=100x100:duration=1',
+            '-vf', f"drawtext=fontfile='{font_path}':text='test':x=10:y=10",
+            '-f', 'null', '-'
+        ]
+        
+        result = subprocess.run(test_cmd, capture_output=True, text=True, timeout=10)
+        return result.returncode == 0
+    except:
+        return False
 
 def install_whisperx():
     """Install WhisperX and dependencies if not present."""
@@ -49,6 +99,63 @@ def check_dependencies():
     
     print("✅ All dependencies ready!")
     return True
+
+def wrap_title_text(title, max_chars_per_line=25):
+    """
+    Wrap title text into multiple lines for 9:16 video format.
+    Optimized for mobile viewing with proper line breaks.
+    """
+    if not title:
+        return []
+    
+    # Use Python's textwrap for intelligent word wrapping
+    wrapped_lines = textwrap.fill(title, width=max_chars_per_line).split('\n')
+    
+    # Clean up any extra whitespace
+    wrapped_lines = [line.strip() for line in wrapped_lines if line.strip()]
+    
+    return wrapped_lines
+
+def create_title_overlay_filter(title, font_path=None,
+                                font_size=95, line_wrap=16,
+                                top_margin=80, pad=40):
+    """
+    Draw every wrapped-title line with its own centred blue box.
+    Each box width is driven by drawtext's real text_w value,
+    so it is always perfectly centred on a 9:16 (1080-pixel-wide) frame.
+    """
+    if not title:
+        return ""
+
+    title_font_size = font_size - 20                       # smaller title
+    wrapped         = textwrap.fill(title, width=line_wrap).split("\n")
+    line_h          = title_font_size + pad
+    filters         = []
+
+    for i, txt in enumerate(wrapped):
+        y_pos = top_margin + i * line_h
+        esc   = txt.replace("'", r"\'").replace(":", r"\:")
+
+        font_clause = (f"fontfile='{font_path}'"
+                       if font_path and os.path.exists(font_path)
+                       else "font='Arial Black'")
+
+        # One drawtext per line: its own blue box, centred with (w-text_w)/2
+        filters.append(
+            "drawtext="
+            f"{font_clause}:"
+            f"fontsize={title_font_size}:"
+            "fontcolor=white:"
+            "shadowcolor=black:shadowx=0:shadowy=0:"
+            "box=1:"                               # blue background ON
+            "boxcolor=#2F6EF6@1:"
+            "boxborderw=10:"                       # thickness / padding
+            "x=(w-text_w)/2:"                      # centre on 1080-wide frame
+            f"y={y_pos}:"
+            f"text='{esc}'"
+        )
+
+    return ",".join(filters)
 
 def segment_text_into_lines(text, max_chars_per_line=20):
     """
@@ -118,13 +225,18 @@ def create_line_segments_from_words(word_intervals, max_chars_per_line=20):
     
     return line_segments
 
-def tiktok_line_alignment(video_path, output_path, model_size="large-v2", font_size=95, font_name="Arial Black"):
+def tiktok_line_alignment(video_path, output_path, model_size="large-v2",
+    font_size=95, font_name="Arial Black", title=None, line_length=20):
     """
     Generate TikTok-style line-by-line captions with instant transitions.
     """
     
     print("🎬 Starting TikTok-style line-by-line alignment...")
     print(f"📹 Input: {os.path.basename(video_path)}")
+    
+    # Setup font once
+    font_path = setup_font()
+    print(f"🔤 Using font: {font_path if font_path else 'System font'}")
     
     # Import WhisperX
     import whisperx
@@ -139,16 +251,11 @@ def tiktok_line_alignment(video_path, output_path, model_size="large-v2", font_s
     print(f"🖥️  Device: {device}")
     print(f"🧠 Model: {model_size}")
     
-    # Step 1: Load WhisperX model
+    # Load WhisperX model
     print("📥 Loading WhisperX model...")
-    model = whisperx.load_model(
-        model_size, 
-        device, 
-        compute_type=compute_type,
-        language="en"
-    )
+    model = whisperx.load_model(model_size, device, compute_type=compute_type, language="en")
     
-    # Step 2: Load and transcribe audio
+    # Load and transcribe audio
     print("🎵 Loading audio...")
     audio = whisperx.load_audio(video_path)
     
@@ -160,30 +267,20 @@ def tiktok_line_alignment(video_path, output_path, model_size="large-v2", font_s
     torch.cuda.empty_cache()
     del model
     
-    # Step 3: Load alignment model for word-level timestamps
+    # Load alignment model for word-level timestamps
     print("📍 Loading word-level alignment model...")
-    model_a, metadata = whisperx.load_align_model(
-        language_code=result["language"], 
-        device=device
-    )
+    model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
     
-    # Step 4: Perform word-level alignment
+    # Perform word-level alignment
     print("✨ Performing word-level alignment...")
-    result = whisperx.align(
-        result["segments"], 
-        model_a, 
-        metadata, 
-        audio, 
-        device, 
-        return_char_alignments=False
-    )
+    result = whisperx.align(result["segments"], model_a, metadata, audio, device, return_char_alignments=False)
     
     # Clear alignment model
     gc.collect()
     torch.cuda.empty_cache()
     del model_a
     
-    # Step 5: Extract word-level intervals
+    # Extract word-level intervals
     print("📊 Extracting word-level timestamps...")
     word_intervals = []
     
@@ -198,22 +295,22 @@ def tiktok_line_alignment(video_path, output_path, model_size="large-v2", font_s
     
     print(f"✅ Extracted {len(word_intervals)} word-level intervals")
     
-    # Step 6: Convert to line-based segments
+    # Convert to line-based segments
     print("📝 Creating line-based caption segments...")
     line_segments = create_line_segments_from_words(word_intervals, max_chars_per_line=20)
     
     print(f"✅ Created {len(line_segments)} line segments")
-    for i, segment in enumerate(line_segments[:3]):  # Show first 3 as preview
+    for i, segment in enumerate(line_segments[:3]):
         print(f"   Line {i+1}: '{segment['text'][:30]}{'...' if len(segment['text']) > 30 else ''}' ({segment['end'] - segment['start']:.1f}s)")
     
-    # Step 7: Generate line-based ASS file
+    # Generate line-based ASS file
     print("🎬 Generating line-by-line TikTok captions...")
     ass_path = output_path.replace('.mp4', '.ass')
     write_line_based_ass(line_segments, ass_path, font_size, font_name)
     
-    # Step 8: Burn captions into video for 9:16 format
+    # Burn captions into video
     print("🔥 Burning line-based captions into 9:16 video...")
-    burn_tiktok_captions_916(video_path, ass_path, output_path)
+    burn_tiktok_captions_916_enhanced(video_path, ass_path, output_path, title, font_size, font_name, line_length, font_path)
     
     print(f"🎉 TikTok-style line-based video created: {output_path}")
     return line_segments
@@ -239,7 +336,7 @@ Title: TikTok Line-by-Line Captions
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: TikTokLine,{font_name},{font_size},&H00FFFFFF,&H00FF6600,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,0,1,40,40,250,1
+Style: TikTokLine,{font_name},{font_size},&H00FFFFFF,&H00FF6600,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,0,1,40,40,350,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -271,56 +368,64 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     
     print("✅ Line-based ASS file generated with instant transitions")
 
-def burn_tiktok_captions_916(video_in, ass_path, video_out):
-    """Burn TikTok-style line-based captions into 9:16 video."""
-    print("🔥 Burning line-based captions for 9:16 format...")
+def burn_tiktok_captions_916_enhanced(video_in, ass_path, video_out, title=None, font_size=95, font_name="Arial Black", line_length=20, font_path=None):
+    """Burn TikTok-style captions with enhanced title handling for 9:16 format."""
+    print("🔥 Burning enhanced captions for 9:16 format...")
     
-    # FFmpeg command optimized for 9:16 TikTok format with line-based positioning
-    subprocess.run([
+    filters = []
+    
+    # Add title overlay if provided
+    if title:
+        print(f"📝 Adding multi-line title: '{title}'")
+        title_filter = create_title_overlay_filter(
+            title, font_path, font_size, line_length, 80, 40
+        )
+        if title_filter:
+            filters.append(title_filter)
+    
+    # Add subtitle filter
+    subtitle_filter = (
+        f"subtitles={ass_path}:"
+        f"force_style='Alignment=1,MarginV=350,PrimaryColour=&H00FFFFFF,"
+        f"SecondaryColour=&H00FF6600,Outline=3,BackColour=&H80000000'"
+    )
+    filters.append(subtitle_filter)
+    
+    # Combine all filters
+    filter_chain = ",".join(filters)
+    
+    # FFmpeg command
+    cmd = [
         "ffmpeg", "-y", "-i", video_in,
-        "-vf", f"subtitles={ass_path}:force_style='Alignment=1,MarginV=250,PrimaryColour=&H00FFFFFF,SecondaryColour=&H00FF6600,Outline=3,BackColour=&H80000000'",
-        "-c:v", "libx264",
-        "-preset", "medium", 
-        "-crf", "23",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-aspect", "9:16",
+        "-vf", filter_chain,
+        "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+        "-c:a", "aac", "-b:a", "128k", "-aspect", "9:16",
         video_out
-    ], check=True, capture_output=True)
+    ]
     
-    print("✅ Line-based TikTok captions burned successfully")
+    print("🎬 Running FFmpeg with corrected parameters...")
+    
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        print("✅ Enhanced TikTok captions burned successfully")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ FFmpeg error: {e}")
+        print("Error output:", e.stderr)
+        raise
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Generate TikTok-style line-by-line captions with WhisperX",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Basic line-by-line captions for TikTok
-  python caption.py video.mp4 transcript.txt output.mp4
-  
-  # Custom line length for different screen sizes
-  python caption.py video.mp4 transcript.txt output.mp4 --line-length 40
-  
-Features:
-  ✅ Line-by-line display (not word-by-word)
-  ✅ Optimal 32-40 character line length for mobile
-  ✅ Instant transitions between complete lines
-  ✅ Blue word highlighting within each line
-  ✅ Perfect fit at bottom of 9:16 video
-  ✅ Natural sentence boundary breaking
-        """
-    )
+    parser = argparse.ArgumentParser(description="Generate TikTok-style captions with simplified font handling")
     
     parser.add_argument("video", help="Input video file")
     parser.add_argument("transcript", help="Transcript file (optional for WhisperX)")
-    parser.add_argument("output", help="Output video with line-based captions")
+    parser.add_argument("output", help="Output video with enhanced captions")
     parser.add_argument("--model", default="large-v2", 
                        choices=["tiny", "base", "small", "medium", "large", "large-v2"],
                        help="WhisperX model size (default: large-v2)")
-    parser.add_argument("--font-size", type=int, default=95, help="Font size (default: 95)")
+    parser.add_argument("--font-size", type=int, default=95, help="Caption font size (default: 95)")
     parser.add_argument("--font-name", default="Arial Black", help="Font name (default: Arial Black)")
-    parser.add_argument("--line-length", type=int, default=20, help="Max characters per line (default: 20)")
+    parser.add_argument("--line-length", type=int, default=20, help="Max characters per caption line (default: 20)")
+    parser.add_argument("--title", help="Title with automatic line wrapping and white background")
     
     args = parser.parse_args()
     
@@ -330,18 +435,18 @@ Features:
         sys.exit(1)
     
     try:
-        # Check and install dependencies
+        # Check dependencies
         if not check_dependencies():
             sys.exit(1)
         
-        # Generate line-based TikTok captions
-        tiktok_line_alignment(args.video, args.output, args.model, args.font_size, args.font_name)
+        # Generate enhanced TikTok captions
+        tiktok_line_alignment(args.video, args.output, args.model, args.font_size, args.font_name, args.title, args.line_length)
         
-        print(f"🎉 SUCCESS! Line-based TikTok video saved to: {args.output}")
-        print("   📝 Line-by-line display with instant transitions")
-        print("   📱 Optimized for 9:16 mobile viewing") 
+        print(f"🎉 SUCCESS! Enhanced TikTok video saved to: {args.output}")
+        print("   📝 Line-by-line captions with instant transitions")
+        print("   📱 Optimized for 9:16 mobile viewing")
         print("   🔵 Blue word highlighting within each line")
-        print("   📏 Perfect line length for mobile readability")
+        print("   🔤 Simple font handling - installed once, works always")
         
     except Exception as e:
         print(f"❌ Error: {e}")
