@@ -7,31 +7,14 @@ import os
 import json
 import logging
 import re
-from pathlib import Path
 from openai import OpenAI
 from dotenv import load_dotenv
 
-# Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Debug: Print current file location
-print(f"Current file: {__file__}")
-print(f"Current directory: {os.path.dirname(__file__)}")
-print(f"Parent directory: {os.path.dirname(os.path.dirname(__file__))}")
-
-# Construct and verify .env path
 env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'secrets', '.env')
-print(f"Looking for .env file at: {env_path}")
-print(f"File exists: {os.path.exists(env_path)}")
-
-# Load environment variables from .env file
 load_dotenv(env_path)
-
-# Debug: Print environment variables
-print(f"OPENAI_API_KEY exists: {bool(os.getenv('OPENAI_API_KEY'))}")
-
-print("OpenAI class is from:", OpenAI.__module__)
 
 def get_random_real_fruit_and_color():
     """
@@ -47,7 +30,7 @@ def get_random_real_fruit_and_color():
         proxy_vars = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'NO_PROXY', 'no_proxy']
         for var in proxy_vars:
             if var in os.environ:
-                print(f"Clearing proxy environment variable: {var}")
+                logger.info(f"Clearing proxy environment variable: {var}")
                 del os.environ[var]
         
         # Initialize client with explicit API key and no proxies

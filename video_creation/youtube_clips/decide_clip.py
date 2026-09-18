@@ -8,21 +8,8 @@ import requests
 from typing import List, Dict
 from dotenv import load_dotenv
 
-# Debug: Print current file location
-print(f"Current file: {__file__}")
-print(f"Current directory: {os.path.dirname(__file__)}")
-print(f"Parent directory: {os.path.dirname(os.path.dirname(__file__))}")
-
-# Construct and verify .env path
 env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'secrets', '.env')
-print(f"Looking for .env file at: {env_path}")
-print(f"File exists: {os.path.exists(env_path)}")
-
-# Load environment variables from .env file
 load_dotenv(env_path)
-
-# Debug: Print environment variables
-print(f"GEMINI_API_KEY exists: {bool(os.getenv('GEMINI_API_KEY'))}")
 
 def load_credentials():
     """Load credentials from environment variables."""

@@ -4,7 +4,6 @@ Script to download and trim specific segments from YouTube videos.
 import os
 import sys
 import subprocess
-from typing import Tuple
 import re
 
 def convert_timestamp_to_seconds(timestamp: str) -> float:
@@ -31,6 +30,13 @@ def convert_timestamp_to_seconds(timestamp: str) -> float:
     else:
         raise ValueError(f"Invalid timestamp format: {timestamp}")
 
+def extract_video_id(url: str) -> str:
+    match = re.search(r"(?:v=|/)([0-9A-Za-z_-]{11})", url)
+    if match:
+        return match.group(1)
+    raise ValueError(f"Could not extract video ID from URL: {url}")
+
+
 def download_clip(url: str, start_time: str, end_time: str) -> str:
     """
     Download and trim a specific segment from a YouTube video.
@@ -44,21 +50,23 @@ def download_clip(url: str, start_time: str, end_time: str) -> str:
         str: Path to the downloaded clip
     """
     try:
-        # Strict URL validation
-        # if url != "https://www.youtube.com/watch?v=RywoFvefNOE":
-        #     raise ValueError("This script only supports downloading clips from https://www.youtube.com/watch?v=RywoFvefNOE")
-            
         # Convert timestamps to seconds
         start_seconds = convert_timestamp_to_seconds(start_time)
         end_seconds = convert_timestamp_to_seconds(end_time)
         
         # Calculate duration
         duration = end_seconds - start_seconds
+        if duration <= 0:
+            raise ValueError(f"Invalid time range: {start_time} -> {end_time}")
+
+        video_id = extract_video_id(url)
         
-        # Create output filename
+        # Create output filename from the actual video id + timestamps
         output_dir = os.path.join(os.path.dirname(__file__), 'temporary_files')
         os.makedirs(output_dir, exist_ok=True)
-        output_file = os.path.join(output_dir, f"clip_RywoFvefNOE_{start_time.replace(',', '_')}_{end_time.replace(',', '_')}.mp4")
+        safe_start = start_time.replace(',', '_').replace(':', '-')
+        safe_end = end_time.replace(',', '_').replace(':', '-')
+        output_file = os.path.join(output_dir, f"clip_{video_id}_{safe_start}_{safe_end}.mp4")
         
         # Download and trim the video with minimal parameters
         command = [

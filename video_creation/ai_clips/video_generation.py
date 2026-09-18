@@ -19,18 +19,24 @@ logger = logging.getLogger(__name__)
 env_path = Path(__file__).parent.parent.parent / "secrets" / ".env"
 load_dotenv(env_path)
 
-# Set FAL_KEY from FAL_AI_VEO3_API_KEY
-if "FAL_AI_VEO3_API_KEY" in os.environ:
+# Map project env name to fal_client's expected FAL_KEY when present.
+if "FAL_AI_VEO3_API_KEY" in os.environ and not os.environ.get("FAL_KEY"):
     os.environ["FAL_KEY"] = os.environ["FAL_AI_VEO3_API_KEY"]
-    logger.info("Successfully loaded FAL_AI_VEO3_API_KEY from secrets/.env")
-else:
-    logger.error("FAL_AI_VEO3_API_KEY not found in secrets/.env")
-    raise ValueError("Please set the FAL_AI_VEO3_API_KEY environment variable in secrets/.env")
 
 # Constants
 TEMP_DIR = Path(__file__).parent / "temporary_files"
 VIDEO_CLIPS_DIR = TEMP_DIR / "video_clips"
 VIDEO_CLIPS_DIR.mkdir(exist_ok=True, parents=True)
+
+
+def _ensure_fal_credentials() -> None:
+    if os.environ.get("FAL_KEY") or os.environ.get("FAL_AI_VEO3_API_KEY"):
+        if not os.environ.get("FAL_KEY"):
+            os.environ["FAL_KEY"] = os.environ["FAL_AI_VEO3_API_KEY"]
+        return
+    raise ValueError(
+        "Set FAL_AI_VEO3_API_KEY (or FAL_KEY) in secrets/.env before generating videos."
+    )
 
 def download_video(url: str, output_path: str) -> bool:
     """
@@ -72,6 +78,7 @@ def generate_video(prompt: str, aspect_ratio: str = "9:16", duration: str = "8s"
         str: Path to the generated video file, or None if generation failed
     """
     try:
+        _ensure_fal_credentials()
         logger.info(f"Generating video with prompt: {prompt}")
         
         # Set up progress callback

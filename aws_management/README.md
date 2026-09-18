@@ -1,52 +1,43 @@
-# AWS Lambda Transcript Fetcher
+# AWS Lambda: YouTube transcript fetch (yt-dlp)
 
-This directory contains the AWS Lambda function for fetching YouTube video transcripts.
+This folder packages a Lambda that downloads English auto-captions for a YouTube URL.
 
-## Files
-- `transcript_fetch.py`: The Lambda function code
-- `requirements.txt`: Python dependencies
-- `deploy_lambda.sh`: Script to create the Lambda deployment package
+## Status
 
-## Deployment Instructions
+**Experimental.** `response.json` records a failed test invoke (yt-dlp YouTube bot check / Lambda read-only filesystem cache issues). Prefer the local `video_creation/youtube_clips/transcript_fetch.py` path for day-to-day use.
 
-1. Make sure you have Python 3.9+ and pip installed
+## Source
 
-2. Create the deployment package:
-```bash
-./deploy_lambda.sh
-```
+- `transcript_fetch.py` — Lambda handler source (restored from the deployment package)
+- `template.yaml` — AWS SAM function definition
+- `shell_scripts/` — IAM, package, and deploy helpers
+- Generated `*.zip` artifacts are gitignored; rebuild with the shell scripts
 
-3. In the AWS Console:
-   - Create a new Lambda function
-   - Choose Python 3.9 or later as the runtime
-   - Upload the generated `transcript_fetch_lambda.zip` file
-   - Set the handler to `transcript_fetch.lambda_handler`
-   - Configure the function with:
-     - Memory: 256MB (minimum)
-     - Timeout: 30 seconds
-     - Basic Lambda execution role
+## Deploy (high level)
 
-## Testing the Lambda Function
+1. Configure AWS CLI credentials for your account.
+2. Build a deployment zip with `shell_scripts/deploy_lambda.sh` or `package.sh`.
+3. Deploy via SAM (`template.yaml`) or upload the zip in the console.
+4. Handler: `transcript_fetch.lambda_handler` (see packaged module layout).
+5. Suggested: ≥256MB memory, ≥30s timeout.
 
-Use this test event in the Lambda console:
+## Test event
+
 ```json
 {
-  "video_url": "https://www.youtube.com/watch?v=Au2glAZrWAo"
+  "video_url": "https://www.youtube.com/watch?v=VIDEO_ID"
 }
 ```
 
-The function will return the transcript content in the response body:
+Expected success shape:
+
 ```json
 {
   "statusCode": 200,
   "body": {
-    "transcript": "... transcript content ..."
+    "transcript": "..."
   }
 }
 ```
 
-## Error Handling
-
-The function returns appropriate error responses:
-- 400: Missing video_url in the event
-- 500: Any other error (e.g., failed to download transcript) 
+YouTube may require cookies for some environments; cookie-updater scripts under `shell_scripts/` are related scaffolding and should be treated as incomplete unless you verify them end-to-end.
